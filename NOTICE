@@ -1,0 +1,10 @@
+FlyEnv Stripe CLI includes code derived from FlyEnv by Pengfei Xu.
+FlyEnv: https://github.com/xpf0000/FlyEnv
+The original BSD-3-Clause copyright and license are preserved in LICENSE.
+
+Stripe CLI is distributed separately by Stripe and is not bundled in this
+repository or plugin archive. Stripe and FlyEnv are their respective owners'
+names; this community plugin is not an official Stripe product.
+
+Plugin builds bundle host utilities and use FlyEnv's installed dependencies.
+See the selected FlyEnv source checkout for those dependencies and licenses.

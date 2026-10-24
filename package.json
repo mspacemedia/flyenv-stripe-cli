@@ -1,0 +1,15 @@
+{
+  "name": "flyenv-stripe-cli",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Stripe CLI, local webhook testing and test-data tools for FlyEnv",
+  "license": "BSD-3-Clause",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/develop.mjs build",
+    "test": "node scripts/develop.mjs test"
+  }
+}
