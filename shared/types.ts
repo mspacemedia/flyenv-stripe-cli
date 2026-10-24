@@ -20,6 +20,7 @@ export type StripeRelease = {
 export type StripeLoginProgress = {
   browserUrl?: string
   verificationCode?: string
+  reauthorization?: boolean
   output?: string
 }
 

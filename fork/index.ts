@@ -32,6 +32,7 @@ import {
   type StripeDataRefresh
 } from '../shared/Workbench'
 import { openStripeTerminal } from './Terminal'
+import { parseStripeAccount, type StripeAccountStatus } from '../shared/Account'
 
 class Stripe extends Base {
   constructor() {
@@ -293,8 +294,21 @@ class Stripe extends Base {
     })
   }
 
+  accountStatus(version: SoftInstalled) {
+    return new ForkPromise<StripeAccountStatus>(async (resolve) => {
+      if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
+      const output = await runStripeCommand(
+        version.bin,
+        [...this.configArgs(), 'whoami', '--format', 'json'],
+        await EnvSync.sync(),
+        30_000
+      )
+      resolve(parseStripeAccount(output))
+    })
+  }
+
   login(version: SoftInstalled) {
-    return new ForkPromise<string>(async (resolve, _reject, on) => {
+    return new ForkPromise<string | { reauthorization: true }>(async (resolve, _reject, on) => {
       if (!existsSync(version.bin))
         throw new Error('Install and select a Stripe CLI version first.')
       await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
@@ -308,7 +322,14 @@ class Stripe extends Base {
           env
         )
         const { browserUrl, verificationCode, args } = parseStripeLogin(output)
-        on({ browserUrl, verificationCode })
+        const reauthorization = args[1] === '--complete-reauth'
+        on({ browserUrl, verificationCode, reauthorization })
+        if (reauthorization) {
+          // CLI polls only for an account-list change; approving unchanged access
+          // has no completion signal. Let the user check their current account.
+          resolve({ reauthorization: true })
+          return
+        }
         const completed = await runStripeCommand(
           version.bin,
           [...config, ...args],

@@ -1,7 +1,9 @@
 import { reactiveBind } from '@/util/Index'
 import { StorageGetAsync, StorageSetAsync } from '@/util/Storage'
 import { forkTerminalRequest } from '@/util/ForkTerminalRequest'
-import { clipboard, shell } from '@/util/NodeFn'
+import { clipboard } from '@/util/NodeFn'
+import { openStripeBrowser } from './Browser'
+import type { StripeAccountStatus } from '../shared/Account'
 import { MessageError, MessageSuccess } from '@/util/Element'
 import { I18nT } from '@lang/index'
 import { StripeT } from './lang'
@@ -37,6 +39,9 @@ export class StripeController {
   discovery = new StripeOperation()
   download = new StripeOperation()
   authentication = new StripeOperation()
+  accountCheck = new StripeOperation()
+  approval = new StripeOperation()
+  reauthorizationPending = false
   inspection = new StripeOperation()
   testEvent = new StripeOperation()
   terminal = new StripeOperation()
@@ -169,7 +174,12 @@ export class StripeController {
 
   async login(version: ModuleInstalledItem | undefined): Promise<void> {
     if (this.authentication.running) return
-    if (this.dataCreation.running || this.dataRefresh.running || this.testEvent.running) {
+    if (
+      this.dataCreation.running ||
+      this.dataRefresh.running ||
+      this.testEvent.running ||
+      this.accountCheck.running
+    ) {
       MessageError(StripeT('finishDataAction'))
       return
     }
@@ -182,25 +192,30 @@ export class StripeController {
     this.verificationCode = ''
     this.browserError = ''
     this.accountSummary = ''
+    this.reauthorizationPending = false
     const request: StripeRequest = (method, args, timeout, progress) =>
       this.request(method, args, timeout, (value: StripeLoginProgress) => {
         progress(value)
         if (value.browserUrl) {
           this.browserUrl = stripeLoginUrl(value.browserUrl)
           this.verificationCode = value.verificationCode ?? ''
+          this.reauthorizationPending = value.reauthorization === true
           // Opening the browser is supplementary: the visible link still allows approval.
-          void shell.openExternal(this.browserUrl).catch((error) => {
-            this.browserError = String(error)
-          })
+          void this.openApproval()
         }
       })
     try {
-      this.accountSummary = await this.authentication.run(
+      const result = await this.authentication.run(
         request,
         'login',
         [version],
         STRIPE_LOGIN_REQUEST_TIMEOUT_MS
       )
+      if (result?.reauthorization === true) {
+        this.reauthorizationPending = true
+        return
+      }
+      this.accountSummary = result
       this.verificationCode = ''
       this.resources = { products: [], prices: [], customers: [], subscriptions: [] }
       this.resourceErrors = []
@@ -209,15 +224,63 @@ export class StripeController {
       this.pendingCreation = undefined
       MessageSuccess(StripeT('connected'))
     } catch (error) {
+      this.reauthorizationPending = false
       MessageError(String(error))
     } finally {
+      if (!this.reauthorizationPending) this.browserUrl = ''
+    }
+  }
+
+  async openApproval(): Promise<void> {
+    if (!this.browserUrl || this.approval.running) return
+    const url = stripeLoginUrl(this.browserUrl)
+    this.browserError = ''
+    try {
+      await this.approval.run(async () => openStripeBrowser(url), 'openApproval', [], 15_000)
+    } catch (error) {
+      if (this.browserUrl === url) this.browserError = String(error)
+    }
+  }
+
+  async checkConnection(version: ModuleInstalledItem | undefined): Promise<void> {
+    if (this.accountCheck.running || this.authentication.running) return
+    if (this.dataCreation.running || this.dataRefresh.running || this.testEvent.running) {
+      MessageError(StripeT('finishDataAction'))
+      return
+    }
+    try {
+      const selected = this.requireCLI(version)
+      const account: StripeAccountStatus = await this.accountCheck.run(
+        this.request,
+        'accountStatus',
+        [selected],
+        45_000
+      )
+      this.accountSummary = StripeT('accountChecked', {
+        name: account.displayName || account.accountId,
+        id: account.accountId,
+        mode: account.mode
+      })
+      this.reauthorizationPending = false
       this.browserUrl = ''
+      this.browserError = ''
+      this.verificationCode = ''
+      this.authentication.error = ''
+      this.resources = { products: [], prices: [], customers: [], subscriptions: [] }
+      this.resourceErrors = []
+      this.resourceHasMore = []
+      this.createdResource = undefined
+      this.pendingCreation = undefined
+      MessageSuccess(StripeT('connectionChecked'))
+    } catch (error) {
+      MessageError(String(error))
     }
   }
 
   private requireCLI(version: ModuleInstalledItem | undefined): ModuleInstalledItem {
     if (!version?.enable) throw new Error(StripeT('selectCLI'))
     if (this.authentication.running) throw new Error(StripeT('loginPending'))
+    if (this.accountCheck.running) throw new Error(StripeT('accountCheckPending'))
     return version
   }
 

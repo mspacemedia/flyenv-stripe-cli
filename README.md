@@ -31,7 +31,9 @@ FlyEnv's current plugin manager requires an active FlyEnv license. It installs f
 4. Choose a sample and press **Send test event**. Check the delivery log and your application to confirm receipt. The event filter must include the chosen event, or be empty to receive all snapshot events.
 5. Use **Test data** to create a product, a recurring price and a customer, then create a subscription linking those IDs. Object creation can generate webhooks, but it does not prove the local endpoint accepted them.
 
-Account approval waits up to ten minutes. An ended attempt keeps its comparison code visible, removes its approval link and requires a fresh connection attempt. Do not approve an expired browser page.
+A fresh account connection waits up to ten minutes and displays a pairing code. An ended attempt keeps its comparison code visible, removes its approval link and requires a fresh attempt. Do not approve an expired browser page.
+
+If Stripe CLI already has a session, Stripe can show account permissions without a pairing code. FlyEnv ends the initial request, keeps the approval button available and asks you to finish in your browser, then choose **Check connection**. CLI 1.55.1 cannot automatically detect reapproval of unchanged accounts, so this flow does not wait for its account-list-change poll. Check connection reads the current CLI account through `stripe whoami --format json`; it reports the active account and mode, rather than claiming permissions changed. It can also be used to inspect an existing connection without starting a new login. Checking requires a CLI version supporting that command (tested with 1.55.1).
 
 Creation requests carry idempotency keys. Retrying unchanged failed input within the current app session reuses its key; changing fields, reconnecting or restarting creates a new request. If a request times out, check Stripe before changing fields or restarting: the object may already exist. A failed list refresh cannot undo or repeat a successful creation. Resource-list errors are reported individually while successful lists remain available.
 
@@ -66,7 +68,7 @@ npm test -- --flyenv-root ../FlyEnv
 npm run build -- --flyenv-root ../FlyEnv
 ```
 
-The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.2.0.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
+The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.2.1.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
 
 Tests use simulated IPC/browser boundaries and local fixtures; they never approve Stripe access, create real account objects or start a listener. They cover login parsing/pairing, process cleanup, duplicate requests, idempotent retries, test-mode argv isolation, exact amount conversion, terminal quoting, localization and plugin build/import. An optional real-binary runtime test in `tests/runtime.test.ts` can be run from a FlyEnv checkout to check binary discovery and retained configuration without authenticating.
 

@@ -59,7 +59,12 @@ try {
     await cp(join(source, file), join(temporary, file), { recursive: true })
   const name = basename(temporary)
   if (action === 'test') {
-    for (const file of ['service.test.ts', 'controller.test.ts', 'workbench.test.ts'])
+    for (const file of [
+      'service.test.ts',
+      'controller.test.ts',
+      'workbench.test.ts',
+      'reauthorization.test.ts'
+    ])
       await run([join(temporary, 'tests', file)])
     await run([join(host, 'scripts/plugin-test.ts'), name])
   } else {

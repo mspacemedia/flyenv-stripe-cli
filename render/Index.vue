@@ -29,7 +29,8 @@
                       stripe.authentication.running ||
                       stripe.dataCreation.running ||
                       stripe.testEvent.running ||
-                      stripe.dataRefresh.running
+                      stripe.dataRefresh.running ||
+                      stripe.accountCheck.running
                     "
                     class="w-full"
                   >
@@ -57,6 +58,20 @@
                 >
                   {{ StripeT('openCLI') }}
                 </el-button>
+                <el-button
+                  :loading="stripe.accountCheck.running"
+                  :disabled="!version || stripe.authentication.running"
+                  @click="stripe.checkConnection(version)"
+                >
+                  {{ StripeT('checkConnection') }}
+                </el-button>
+                <el-alert
+                  v-if="stripe.reauthorizationPending"
+                  class="mt-4"
+                  :title="StripeT('reauthorizationHelp')"
+                  type="info"
+                  :closable="false"
+                />
                 <div
                   v-if="stripe.verificationCode"
                   class="mt-4 rounded border border-[var(--el-border-color)] p-4"
@@ -74,21 +89,26 @@
                     }}
                   </p>
                 </div>
-                <a
+                <el-button
                   v-if="stripe.browserUrl"
                   class="mt-3 inline-block break-all"
-                  :href="stripe.browserUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  >{{ StripeT('openLogin') }}</a
+                  link
+                  type="primary"
+                  :loading="stripe.approval.running"
+                  @click="stripe.openApproval"
+                  >{{ StripeT('openLogin') }}</el-button
                 >
                 <p v-if="stripe.accountSummary" class="mt-3 whitespace-pre-wrap text-sm">{{
                   stripe.accountSummary
                 }}</p>
                 <el-alert
-                  v-if="stripe.authentication.error || stripe.browserError"
+                  v-if="
+                    stripe.authentication.error || stripe.browserError || stripe.accountCheck.error
+                  "
                   class="mt-3"
-                  :title="stripe.authentication.error || stripe.browserError"
+                  :title="
+                    stripe.authentication.error || stripe.browserError || stripe.accountCheck.error
+                  "
                   type="error"
                   :closable="false"
                 />

@@ -27,7 +27,9 @@ try {
       'export const MessageError = value => globalThis.__stripePairingTest.errors.push(value); export const MessageSuccess = value => globalThis.__stripePairingTest.successes.push(value)',
     '@lang/index':
       'export const I18nT = key => key; export const AppI18n = () => ({global: {locale: "en"}})',
-    '@/store/brew': 'export const BrewStore = () => ({module: () => ({installed: []})})'
+    '@/store/brew': 'export const BrewStore = () => ({module: () => ({installed: []})})',
+    './Browser':
+      'export const openStripeBrowser = (...args) => globalThis.__stripePairingTest.open(...args)'
   }
   const output = join(temporary, 'controller.mjs')
   await build({
@@ -40,6 +42,10 @@ try {
       {
         name: 'stripe-test-host',
         setup(builder) {
+          builder.onResolve({ filter: /^\.\/Browser$/ }, ({ path }) => ({
+            path,
+            namespace: 'stripe-test-host'
+          }))
           builder.onResolve({ filter: /^@/ }, ({ path }) => {
             if (!bridges[path]) throw new Error(`Unexpected controller host import: ${path}`)
             return { path, namespace: 'stripe-test-host' }
@@ -152,6 +158,85 @@ try {
   assert.equal(calls, 2)
   assert.equal(errors.length, 1)
   assert.equal(successes.length, 1)
+  const beforeReauthSuccesses = successes.length
+  const reauth = controller.login(version)
+  await tick()
+  mock.open = async () => {}
+  const approvalUrl = 'https://access.stripe.com/reauthorize/fixture'
+  progress({ browserUrl: approvalUrl, verificationCode: '', reauthorization: true })
+  complete({ code: 0, data: { reauthorization: true } })
+  await reauth
+  await tick()
+  assert.equal(
+    controller.authentication.running,
+    false,
+    'reauthorization cannot spin waiting for an unchanged account list'
+  )
+  assert.equal(controller.reauthorizationPending, true)
+  assert.equal(controller.verificationCode, '', 'existing sessions do not require a pairing code')
+  assert.equal(controller.browserUrl, approvalUrl)
+  assert.equal(
+    successes.length,
+    beforeReauthSuccesses,
+    'opening account permissions cannot claim completed consent'
+  )
+  controller.attach()
+  await tick()
+  controller.detach()
+  assert.equal(controller.reauthorizationPending, true, 'pending permissions survive page re-entry')
+  await controller.openApproval()
+  let checkCalls = 0
+  let finishCheck!: (value: unknown) => void
+  mock.request = (_command: string, args: any[]) => {
+    assert.equal(args[0], 'accountStatus')
+    checkCalls++
+    return new Promise((resolve) => {
+      finishCheck = resolve
+    })
+  }
+  const check = controller.checkConnection(version)
+  await tick()
+  await controller.checkConnection(version)
+  await controller.login(version)
+  assert.equal(checkCalls, 1)
+  finishCheck({ code: 1, msg: 'Account verification unavailable' })
+  await check
+  assert.equal(
+    controller.reauthorizationPending,
+    true,
+    'verification failure retains the approval link'
+  )
+  assert.equal(controller.browserUrl, approvalUrl)
+  assert.equal(controller.accountCheck.running, false)
+  const checked = controller.checkConnection(version)
+  await tick()
+  finishCheck({
+    code: 0,
+    data: { accountId: 'acct_fixture', displayName: 'Fixture', mode: 'test' }
+  })
+  await checked
+  assert.equal(controller.reauthorizationPending, false)
+  assert.equal(controller.browserUrl, '')
+  assert.equal(controller.accountCheck.error, '')
+  mock.request = async (
+    _command: string,
+    args: any[],
+    _message: string,
+    _timeout: number,
+    onProgress: (value: unknown) => void
+  ) => {
+    assert.equal(args[0], 'login')
+    onProgress({ code: 200, msg: { browserUrl: approvalUrl, reauthorization: true } })
+    throw new Error('Login preparation interrupted')
+  }
+  await controller.login(version)
+  await tick()
+  assert.equal(
+    controller.reauthorizationPending,
+    false,
+    'failed preparation cannot retain a pending approval link'
+  )
+  assert.equal(controller.browserUrl, '')
   let createCalls = 0
   let finishCreation!: (value: unknown) => void
   const creationIds: string[] = []
