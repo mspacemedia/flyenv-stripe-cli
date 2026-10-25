@@ -3,6 +3,7 @@ import type { AppModuleItem } from '@/core/type'
 
 const module: AppModuleItem = {
   moduleType: 'networkTunnel',
+  preferredModuleType: 'apiTools',
   typeFlag: 'stripe',
   label: 'Stripe CLI',
   icon: import('../assets/stripe.svg?raw'),

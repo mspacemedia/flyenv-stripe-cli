@@ -84,3 +84,7 @@ CLI commands clear inherited Stripe overrides and set `STRIPE_CLI_TELEMETRY_OPTO
 Plugins share FlyEnv's runtime and are not sandboxed. This plugin does not change FlyEnv's vendor/license requests. Signing secrets are redacted in the displayed log but remain in raw listener logs. Stripe CLI manages credential storage, including its plaintext fallback when an OS credential store is unavailable. CLI downloads are restricted to official Stripe GitHub releases and checked by executable version; archive-checksum verification for those CLI downloads is not yet implemented. Forwarding accepts a user-provided HTTP(S) URL; use a trusted local destination and certificate verification where possible.
 
 BSD-3-Clause; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Stripe CLI is distributed separately under its own license. This is a community plugin, not an official Stripe product.
+
+## Shared community registry
+
+Add `https://raw.githubusercontent.com/mspacemedia/flyenv-plugins/main/registry.json` in FlyEnv Settings → Plugin Market to browse API Client, Mocktoon and Stripe CLI together. This plugin prefers the API Tools section on updated hosts and retains its existing category on older hosts.

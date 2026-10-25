@@ -1,6 +1,6 @@
 {
   "name": "flyenv-stripe-cli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Stripe CLI, local webhook testing and test-data tools for FlyEnv",
