@@ -174,6 +174,40 @@ try {
   assert.equal((await stripe.accountStatus(version)).accountId, 'acct_fixture')
   assert.ok(calls[2].includes('whoami'))
   assert.ok(calls[2].includes('--config'))
+  assert.equal(
+    calls.some((args) => args.includes('--new-session')),
+    false,
+    'ordinary connection never replaces a session'
+  )
+  await assert.rejects(stripe.login(version, true), /does not support fresh sessions/)
+  const beforeFresh = calls.length
+  fixture.run = async (_bin: string, args: string[]) => {
+    calls.push(args)
+    if (args.includes('--help')) return '--non-interactive --new-session'
+    if (args.includes('--non-interactive')) {
+      assert.ok(args.includes('--new-session'))
+      return JSON.stringify({
+        browser_url: 'https://access.stripe.com/stripecli/oauth2/device?user_code=ABCD-EFGH',
+        verification_code: 'ABCD-EFGH',
+        next_step: 'stripe login --complete-device'
+      })
+    }
+    assert.ok(args.includes('--complete-device'))
+    assert.equal(
+      args.includes('--new-session'),
+      false,
+      'completion must use the device request already created'
+    )
+    return 'Connected'
+  }
+  assert.equal(await stripe.login(version, true), 'Connected')
+  assert.equal(calls.length - beforeFresh, 3)
+  assert.deepEqual(
+    calls.at(-1)!.slice(0, 2),
+    calls[0].slice(0, 2),
+    'fresh login retains the same config file'
+  )
+  await assert.rejects(stripe.login(version, 'yes'), /Invalid Stripe login mode/)
   console.log('Stripe reauthorization, account status and browser IPC regression tests passed')
 } finally {
   ;(globalThis as any).Server = oldServer

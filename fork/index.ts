@@ -33,6 +33,7 @@ import {
 } from '../shared/Workbench'
 import { openStripeTerminal } from './Terminal'
 import { parseStripeAccount, type StripeAccountStatus } from '../shared/Account'
+import { stripeRuntimeFromLogs } from '../shared/Authentication'
 
 class Stripe extends Base {
   constructor() {
@@ -307,18 +308,23 @@ class Stripe extends Base {
     })
   }
 
-  login(version: SoftInstalled) {
+  login(version: SoftInstalled, freshSession = false) {
     return new ForkPromise<string | { reauthorization: true }>(async (resolve, _reject, on) => {
+      if (typeof freshSession !== 'boolean') throw new Error('Invalid Stripe login mode.')
       if (!existsSync(version.bin))
         throw new Error('Install and select a Stripe CLI version first.')
       await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
       const env = await EnvSync.sync()
       const config = this.configArgs()
       const help = await runStripeCommand(version.bin, [...config, 'login', '--help'], env)
+      if (freshSession && !help.includes('--new-session'))
+        throw new Error(
+          'This Stripe CLI version does not support fresh sessions. Install a newer CLI version first.'
+        )
       if (help.includes('--non-interactive')) {
         const output = await runStripeCommand(
           version.bin,
-          [...config, 'login', '--non-interactive'],
+          [...config, 'login', '--non-interactive', ...(freshSession ? ['--new-session'] : [])],
           env
         )
         const { browserUrl, verificationCode, args } = parseStripeLogin(output)
@@ -342,7 +348,7 @@ class Stripe extends Base {
         let lastUrl = ''
         const output = await runStripeCommand(
           version.bin,
-          [...config, 'login', '--browserless'],
+          [...config, 'login', '--browserless', ...(freshSession ? ['--new-session'] : [])],
           env,
           STRIPE_LOGIN_WAIT_TIMEOUT_MS,
           (text) => {
@@ -393,10 +399,7 @@ class Stripe extends Base {
       const output = (await Promise.all(this.logPaths().map((file) => this.readLog(file)))).join(
         '\n'
       )
-      resolve({
-        secret: output.match(/whsec_[A-Za-z0-9]+/)?.[0] ?? '',
-        output: redactStripeOutput(output).slice(-48_000)
-      })
+      resolve(stripeRuntimeFromLogs(output))
     })
   }
 

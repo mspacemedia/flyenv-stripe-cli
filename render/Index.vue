@@ -19,6 +19,14 @@
             />
             <el-card class="mt-4">
               <template #header>{{ StripeT('account') }}</template>
+              <el-alert
+                v-if="stripe.listenerAuthError"
+                class="mb-4"
+                :title="StripeT('listenerAuthFailure')"
+                type="error"
+                :closable="false"
+                show-icon
+              />
               <el-form label-position="top" @submit.prevent>
                 <el-form-item :label="StripeT('cliVersion')">
                   <el-select
@@ -65,6 +73,14 @@
                 >
                   {{ StripeT('checkConnection') }}
                 </el-button>
+                <el-button
+                  :loading="stripe.authentication.running"
+                  :disabled="!version || busy || !!active || stripe.accountCheck.running"
+                  @click="stripe.login(version, true)"
+                >
+                  {{ StripeT('freshSession') }}
+                </el-button>
+                <p class="mt-3 text-xs opacity-75">{{ StripeT('freshSessionHelp') }}</p>
                 <el-alert
                   v-if="stripe.reauthorizationPending"
                   class="mt-4"

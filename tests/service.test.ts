@@ -8,6 +8,7 @@ import {
 import { stripeAssetSuffix, stripeReleaseAssets, type GitHubRelease } from '../fork/Releases'
 import { runStripeCommand, stripeEnvironment } from '../fork/Command'
 import { startStripeListener } from '../fork/Listener'
+import { hasStripeAuthenticationFailure, stripeRuntimeFromLogs } from '../shared/Authentication'
 import { StripeOperation, type StripeRequest } from '../render/Operation'
 import { StripeRuntimePolling } from '../render/Polling'
 import { stripeSiteTargets } from '../render/Sites'
@@ -284,6 +285,57 @@ poller.detach()
 assert.equal(scheduled.size, 0, 'page detach removes its polling timer')
 
 const started = { 'APP-Service-Start-PID': '1234' }
+const authFailure =
+  'Error while authenticating with Stripe: Authorization failed, status=403, body={"error":{"message":"Permission denied.","code":"unauthorized"}}'
+assert.equal(hasStripeAuthenticationFailure(authFailure), true)
+assert.equal(hasStripeAuthenticationFailure('Stripe CLI session expired'), true)
+for (const output of [
+  'POST https://local.test/webhook [403] unauthorized',
+  'certificate verification failed',
+  'Error while authenticating with Stripe: network timeout\nPOST local [403] unauthorized'
+])
+  assert.equal(hasStripeAuthenticationFailure(output), false)
+assert.deepEqual(stripeRuntimeFromLogs('\n'), { secret: '', output: '\n' })
+const rejectedRuntime = stripeRuntimeFromLogs(`Ready whsec_fixture\n${authFailure}`)
+assert.equal(rejectedRuntime.secret, '')
+assert.match(rejectedRuntime.authError!, /Reconnect with a fresh session/)
+let authStops = 0
+await assert.rejects(
+  startStripeListener(
+    async () => started,
+    async () => rejectedRuntime,
+    async () => {
+      authStops++
+    }
+  ),
+  /Reconnect with a fresh session/
+)
+assert.equal(authStops, 1)
+await assert.rejects(
+  startStripeListener(
+    async () => {
+      throw new Error(authFailure)
+    },
+    async () => {
+      throw new Error('must not read')
+    },
+    async () => {
+      authStops++
+    }
+  ),
+  /Reconnect with a fresh session/
+)
+assert.equal(authStops, 1, 'a failed start without a PID cannot stop an unknown child')
+await assert.rejects(
+  startStripeListener(
+    async () => started,
+    async () => rejectedRuntime,
+    async () => {
+      throw new Error('termination denied')
+    }
+  ),
+  /Reconnect with a fresh session[\s\S]*cleanup failed: Error: termination denied/
+)
 let stopped = 0
 let clock = 0
 let reads = 0

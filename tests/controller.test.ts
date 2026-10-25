@@ -70,6 +70,7 @@ try {
   let fail!: (reason: Error) => void
   let complete!: (value: unknown) => void
   let calls = 0
+  const loginModes: unknown[] = []
   mock.request = (
     _command: string,
     args: unknown[],
@@ -79,6 +80,7 @@ try {
   ) => {
     if (args[0] === 'runtime') return Promise.resolve({ code: 0, data: { secret: '', output: '' } })
     assert.equal(args[0], 'login')
+    loginModes.push(args[2])
     assert.equal(timeout, STRIPE_LOGIN_REQUEST_TIMEOUT_MS)
     calls++
     progress = (value) => onProgress({ code: 200, msg: value })
@@ -135,9 +137,16 @@ try {
     'failed attempt retains the code with ended UI'
   )
 
-  const retry = controller.login(version)
+  const retry = controller.login(version, true)
   assert.equal(controller.verificationCode, '', 'a new attempt discards the old comparison code')
   await tick()
+  assert.deepEqual(
+    loginModes,
+    [false, true],
+    'the fresh-session button explicitly forwards its selected mode'
+  )
+  await controller.login(version, true)
+  assert.equal(calls, 2, 'fresh-session duplicate clicks cannot replace a pending attempt')
   mock.open = async () => {
     throw new Error('Browser unavailable')
   }

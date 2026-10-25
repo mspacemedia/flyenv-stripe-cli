@@ -57,6 +57,7 @@ export class StripeController {
   browserUrl = ''
   verificationCode = ''
   accountSummary = ''
+  listenerAuthError = ''
   browserError = ''
   secret = ''
   output = ''
@@ -172,7 +173,7 @@ export class StripeController {
     }
   }
 
-  async login(version: ModuleInstalledItem | undefined): Promise<void> {
+  async login(version: ModuleInstalledItem | undefined, freshSession = false): Promise<void> {
     if (this.authentication.running) return
     if (
       this.dataCreation.running ||
@@ -208,7 +209,7 @@ export class StripeController {
       const result = await this.authentication.run(
         request,
         'login',
-        [version],
+        [version, freshSession],
         STRIPE_LOGIN_REQUEST_TIMEOUT_MS
       )
       if (result?.reauthorization === true) {
@@ -369,6 +370,7 @@ export class StripeController {
       const runtime: StripeRuntime = await this.inspection.run(this.request, 'runtime', [], 15_000)
       this.secret = runtime.secret
       this.output = runtime.output
+      this.listenerAuthError = runtime.authError ?? ''
     } catch {
       // inspection.error is displayed separately; it cannot undo a service transition.
     }

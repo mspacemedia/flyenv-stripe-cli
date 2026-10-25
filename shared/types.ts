@@ -27,4 +27,5 @@ export type StripeLoginProgress = {
 export type StripeRuntime = {
   secret: string
   output: string
+  authError?: string
 }
