@@ -299,7 +299,7 @@ for (const output of [
 assert.deepEqual(stripeRuntimeFromLogs('\n'), { secret: '', output: '\n' })
 const rejectedRuntime = stripeRuntimeFromLogs(`Ready whsec_fixture\n${authFailure}`)
 assert.equal(rejectedRuntime.secret, '')
-assert.match(rejectedRuntime.authError!, /Sign in to another account/)
+assert.match(rejectedRuntime.authError!, /Start a fresh CLI session/)
 let authStops = 0
 await assert.rejects(
   startStripeListener(
@@ -309,7 +309,7 @@ await assert.rejects(
       authStops++
     }
   ),
-  /Sign in to another account/
+  /Start a fresh CLI session/
 )
 assert.equal(authStops, 1)
 await assert.rejects(
@@ -324,7 +324,7 @@ await assert.rejects(
       authStops++
     }
   ),
-  /Sign in to another account/
+  /Start a fresh CLI session/
 )
 assert.equal(authStops, 1, 'a failed start without a PID cannot stop an unknown child')
 await assert.rejects(
@@ -335,7 +335,7 @@ await assert.rejects(
       throw new Error('termination denied')
     }
   ),
-  /Sign in to another account[\s\S]*cleanup failed: Error: termination denied/
+  /Start a fresh CLI session[\s\S]*cleanup failed: Error: termination denied/
 )
 let stopped = 0
 let clock = 0

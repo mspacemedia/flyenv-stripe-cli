@@ -66,6 +66,7 @@ export class StripeController {
   private pendingCreation?: { key: string; requestId: string }
   saving = false
   browserUrl = ''
+  manualApproval = false
   verificationCode = ''
   accountSummary = ''
   listenerAuthError = ''
@@ -119,6 +120,7 @@ export class StripeController {
     this.runtimeGeneration++
     this.accountSummary = ''
     this.browserUrl = ''
+    this.manualApproval = false
     this.verificationCode = ''
     this.browserError = ''
     this.reauthorizationPending = false
@@ -344,7 +346,11 @@ export class StripeController {
     }
   }
 
-  async login(version: ModuleInstalledItem | undefined, freshSession = false): Promise<void> {
+  async login(
+    version: ModuleInstalledItem | undefined,
+    freshSession = false,
+    manualBrowser = false
+  ): Promise<void> {
     if (!this.loaded && !(await this.ready())) return
     if (this.authentication.running) return
     if (
@@ -375,6 +381,7 @@ export class StripeController {
       return
     }
     this.browserUrl = ''
+    this.manualApproval = manualBrowser === true
     this.verificationCode = ''
     this.browserError = ''
     this.accountSummary = ''
@@ -387,7 +394,7 @@ export class StripeController {
           this.verificationCode = value.verificationCode ?? ''
           this.reauthorizationPending = value.reauthorization === true
           // Opening the browser is supplementary: the visible link still allows approval.
-          void this.openApproval()
+          if (!manualBrowser) void this.openApproval()
         }
       })
     try {
@@ -413,7 +420,10 @@ export class StripeController {
       this.reauthorizationPending = false
       MessageError(String(error))
     } finally {
-      if (!this.reauthorizationPending) this.browserUrl = ''
+      if (!this.reauthorizationPending) {
+        this.browserUrl = ''
+        this.manualApproval = false
+      }
     }
   }
 
@@ -423,6 +433,18 @@ export class StripeController {
     this.browserError = ''
     try {
       await this.approval.run(async () => openStripeBrowser(url), 'openApproval', [], 15_000)
+    } catch (error) {
+      if (this.browserUrl === url) this.browserError = String(error)
+    }
+  }
+
+  async copyApprovalLink(): Promise<void> {
+    if (!this.browserUrl || this.approval.running) return
+    const url = stripeLoginUrl(this.browserUrl)
+    this.browserError = ''
+    try {
+      await this.approval.run(async () => clipboard.writeText(url), 'copyApprovalLink', [url])
+      if (this.browserUrl === url) MessageSuccess(StripeT('approvalCopied'))
     } catch (error) {
       if (this.browserUrl === url) this.browserError = String(error)
     }
@@ -450,6 +472,7 @@ export class StripeController {
       })
       this.reauthorizationPending = false
       this.browserUrl = ''
+      this.manualApproval = false
       this.browserError = ''
       this.verificationCode = ''
       this.authentication.error = ''

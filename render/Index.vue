@@ -127,6 +127,12 @@
                 >
                   {{ StripeT('freshSession') }}
                 </el-button>
+                <el-button
+                  :loading="stripe.authentication.running"
+                  :disabled="!stripe.loaded || !version || stripe.connectionBusy"
+                  @click="stripe.login(version, true, true)"
+                  >{{ StripeT('differentUser') }}</el-button
+                >
                 <el-popconfirm
                   :title="StripeT('disconnectConfirm')"
                   :confirm-button-text="StripeT('disconnect')"
@@ -145,6 +151,26 @@
                   </template>
                 </el-popconfirm>
                 <p class="mt-3 text-xs opacity-75">{{ StripeT('freshSessionHelp') }}</p>
+                <el-alert
+                  v-if="stripe.manualApproval && stripe.browserUrl"
+                  class="mt-4"
+                  :title="StripeT('privateApprovalHelp')"
+                  type="info"
+                  :closable="false"
+                  show-icon
+                />
+                <div v-if="stripe.browserUrl" class="mt-3">
+                  <el-button :loading="stripe.approval.running" @click="stripe.copyApprovalLink">{{
+                    StripeT('copyApproval')
+                  }}</el-button>
+                  <el-input
+                    v-if="stripe.manualApproval"
+                    class="mt-2"
+                    :model-value="stripe.browserUrl"
+                    readonly
+                    :aria-label="StripeT('copyApproval')"
+                  />
+                </div>
                 <el-alert
                   v-if="stripe.reauthorizationPending"
                   class="mt-4"
@@ -170,7 +196,7 @@
                   </p>
                 </div>
                 <el-button
-                  v-if="stripe.browserUrl"
+                  v-if="stripe.browserUrl && !stripe.manualApproval"
                   class="mt-3 inline-block break-all"
                   link
                   type="primary"

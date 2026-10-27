@@ -22,7 +22,7 @@ try {
     '@/util/ForkTerminalRequest':
       'export const forkTerminalRequest = (...args) => globalThis.__stripePairingTest.request(...args)',
     '@/util/NodeFn':
-      'export const clipboard = {writeText: async () => {}}; export const shell = {openExternal: (...args) => globalThis.__stripePairingTest.open(...args)}',
+      'export const clipboard = {writeText: (...args) => globalThis.__stripePairingTest.write(...args)}; export const shell = {openExternal: (...args) => globalThis.__stripePairingTest.open(...args)}',
     '@/util/Element':
       'export const MessageError = value => globalThis.__stripePairingTest.errors.push(value); export const MessageSuccess = value => globalThis.__stripePairingTest.successes.push(value)',
     '@lang/index':
@@ -30,7 +30,7 @@ try {
     '@/store/brew':
       'export const BrewStore = () => ({module: () => globalThis.__stripePairingTest.module})',
     './Browser':
-      'export const openStripeBrowser = (...args) => globalThis.__stripePairingTest.open(...args)'
+      'export const openStripeBrowser = (...args) => { globalThis.__stripePairingTest.opens++; return globalThis.__stripePairingTest.open(...args) }'
   }
   const output = join(temporary, 'controller.mjs')
   await build({
@@ -64,6 +64,8 @@ try {
   mock.read = async () => ({})
   mock.save = async () => {}
   mock.module = { installed: [], starting: false }
+  mock.write = async () => {}
+  mock.opens = 0
   const version = { enable: true, bin: 'fixture-stripe', version: '1.55.1' }
   const tick = () => new Promise<void>((done) => setImmediate(done))
   const errors: string[] = []
@@ -383,6 +385,7 @@ try {
     })
   }
   const logout = preferencesController.disconnect(version)
+  const browserOpensBeforeLogout = mock.opens
   await tick()
   preferencesController.attach()
   await tick()
@@ -408,6 +411,11 @@ try {
   await tick()
   finishLogout({ code: 0, data: 'Logged out. Warning: remote revocation failed.' })
   await retryLogout
+  assert.equal(
+    mock.opens,
+    browserOpensBeforeLogout,
+    'logout must never open a browser or replay login'
+  )
   assert.equal(logouts, 2)
   assert.equal(preferencesController.disconnection.error, '')
   assert.match(preferencesController.disconnectOutput, /Warning: remote revocation failed/)
@@ -431,6 +439,73 @@ try {
   const broken = new StripeController()
   await assert.rejects(broken.load(), /Storage read denied/)
   assert.equal(broken.loaded, false)
+  const manual = new StripeController()
+  manual.loaded = true
+  let manualProgress!: (value: unknown) => void
+  let finishManual!: (value: any) => void
+  let manualCalls = 0
+  mock.request = (
+    _command: string,
+    args: any[],
+    _message: string,
+    _timeout: number,
+    onProgress: (value: any) => void
+  ) => {
+    if (args[0] === 'runtime') return Promise.resolve({ code: 0, data: { secret: '', output: '' } })
+    assert.equal(args[0], 'login')
+    assert.equal(args[2], true, 'different-user approval must start a fresh CLI session')
+    manualCalls++
+    manualProgress = onProgress
+    return new Promise((done) => {
+      finishManual = done
+    })
+  }
+  const opensBeforeManual = mock.opens
+  const manualLogin = manual.login(version, true, true)
+  await tick()
+  manualProgress({ code: 200, msg: login })
+  await tick()
+  assert.equal(manual.manualApproval, true)
+  assert.equal(manual.verificationCode, 'ABCD-EFGH')
+  assert.equal(
+    mock.opens,
+    opensBeforeManual,
+    'different-user login must not open the signed-in default browser'
+  )
+  await manual.login(version, true, true)
+  assert.equal(manualCalls, 1)
+  manual.attach()
+  await tick()
+  manual.detach()
+  assert.equal(manual.manualApproval, true, 'page re-entry retains the chosen browser handoff')
+  let copied = ''
+  mock.write = async (text: string) => {
+    copied = text
+  }
+  await manual.copyApprovalLink()
+  assert.equal(copied, login.browserUrl)
+  mock.write = async () => {
+    throw new Error('Clipboard unavailable')
+  }
+  await manual.copyApprovalLink()
+  assert.match(manual.browserError, /Clipboard unavailable/)
+  assert.equal(
+    manual.authentication.running,
+    true,
+    'clipboard failure cannot cancel credential approval'
+  )
+  assert.equal(manual.browserUrl, login.browserUrl)
+  assert.equal(mock.opens, opensBeforeManual)
+  finishManual({ code: 1, msg: 'Device request ended' })
+  await manualLogin
+  assert.equal(manual.manualApproval, false)
+  assert.equal(manual.browserUrl, '')
+  copied = ''
+  mock.write = async (text: string) => {
+    copied = text
+  }
+  await manual.copyApprovalLink()
+  assert.equal(copied, '', 'ended approval cannot be copied as an actionable link')
   console.log(
     'Stripe pairing, saved connections, logout, telemetry and workbench controller regression tests passed'
   )
