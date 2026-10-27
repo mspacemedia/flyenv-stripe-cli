@@ -522,6 +522,83 @@ try {
   }
   await manual.copyApprovalLink()
   assert.equal(copied, '', 'ended approval cannot be copied as an actionable link')
+  const saved = new StripeController()
+  saved.loaded = true
+  saved.preferences = {
+    selected: 'first-user',
+    connections: [
+      { profile: 'default', label: 'Default' },
+      { profile: 'first-user', label: 'First Stripe user' },
+      { profile: 'second-user', label: 'Second Stripe user' }
+    ],
+    telemetry: false
+  }
+  saved.settings = oldSettings
+  mock.module.installed = []
+  mock.save = async () => {}
+  const savedCalls: any[][] = []
+  const opensBeforeSaved = mock.opens
+  const identities: Record<string, any> = {
+    'first-user': { accountId: 'acct_firstUser', displayName: 'First account', mode: 'test' },
+    'second-user': { accountId: 'acct_secondUser', displayName: 'Second account', mode: 'test' }
+  }
+  mock.request = async (_command: string, args: any[]) => {
+    savedCalls.push(args)
+    assert.equal(args[0], 'accountStatus', 'saved connection must never start CLI login or logout')
+    assert.notEqual(args[2].profile, 'default', 'named profile must never fall back to the default')
+    return { code: 0, data: identities[args[2].profile] }
+  }
+  await saved.checkConnection(version)
+  assert.match(saved.accountSummary, /acct_firstUser/)
+  await saved.selectConnection('second-user')
+  await saved.checkConnection(version)
+  assert.match(saved.accountSummary, /acct_secondUser/)
+  assert.equal((await saved.startParams())[0].profile, 'second-user')
+  await saved.selectConnection('first-user')
+  await saved.checkConnection(version)
+  assert.match(saved.accountSummary, /acct_firstUser/)
+  assert.deepEqual(
+    savedCalls.map((args) => args[2].profile),
+    ['first-user', 'second-user', 'first-user']
+  )
+  assert.equal(
+    mock.opens,
+    opensBeforeSaved,
+    "reusing different users' saved profiles does not touch the browser session"
+  )
+  assert.equal(saved.browserUrl, '')
+  assert.equal(saved.verificationCode, '')
+  let finishSavedCheck!: (value: any) => void
+  mock.request = (_command: string, args: any[]) => {
+    savedCalls.push(args)
+    assert.equal(args[0], 'accountStatus')
+    return new Promise((done) => {
+      finishSavedCheck = done
+    })
+  }
+  const pendingSavedCheck = saved.checkConnection(version)
+  await tick()
+  await saved.checkConnection(version)
+  await saved.selectConnection('second-user')
+  await saved.login(version)
+  assert.equal(
+    savedCalls.length,
+    4,
+    'duplicate/switch/authorization clicks cannot replay a pending saved check'
+  )
+  assert.equal(saved.preferences.selected, 'first-user')
+  assert.equal(
+    saved.accountSummary,
+    '',
+    'a pending or failed check cannot retain an earlier identity claim'
+  )
+  finishSavedCheck({ code: 1, msg: 'Stored credentials could not be checked: network unavailable' })
+  await pendingSavedCheck
+  assert.match(saved.accountCheck.error, /network unavailable/)
+  assert.equal(saved.accountSummary, '')
+  assert.equal(saved.authentication.running, false)
+  assert.equal(savedCalls.length, 4, 'failed check cannot fall back to browser login')
+  assert.equal(mock.opens, opensBeforeSaved)
   console.log(
     'Stripe pairing, saved connections, logout, telemetry and workbench controller regression tests passed'
   )

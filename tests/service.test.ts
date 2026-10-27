@@ -62,13 +62,13 @@ assert.ok(STRIPE_LOGIN_REQUEST_TIMEOUT_MS > STRIPE_LOGIN_WAIT_TIMEOUT_MS + 60_00
 
 let locale = 'en'
 const translate = createStripeT(() => locale)
-assert.equal(translate('connect'), 'Connect / update Stripe account')
+assert.equal(translate('connect'), 'Authorize / update access')
 locale = 'zh-hant'
 assert.equal(translate('account'), 'Stripe account')
 locale = 'zh-TW'
 assert.equal(translate('connect'), '连接或更新 Stripe 账户')
 locale = 'unknown'
-assert.equal(translate('connect'), 'Connect / update Stripe account')
+assert.equal(translate('connect'), 'Authorize / update access')
 
 const settings = {
   forwardTo: 'http://myshop.test:8080/stripe/webhook',

@@ -241,7 +241,14 @@ try {
         next_step: 'stripe login --complete-device'
       })
     if (args.includes('--complete-device')) return 'Connected'
-    if (args.includes('whoami')) return JSON.stringify(oauth)
+    if (args.includes('whoami')) {
+      const id = activeProfile === 'flyenv-client' ? 'acct_firstUser' : 'acct_secondUser'
+      return JSON.stringify({
+        ...oauth,
+        account_id: id,
+        authorized_accounts: [{ id, name: activeProfile, modes: ['test'] }]
+      })
+    }
     if (args.includes('logout')) {
       assert.equal(args.includes('--all'), false, 'logout must affect only one profile')
       if (pauseLogout)
@@ -256,7 +263,7 @@ try {
     throw new Error('Unexpected simulated command')
   }
   await stripe.login(version, true, context)
-  await stripe.accountStatus(version, context)
+  assert.equal((await stripe.accountStatus(version, context)).accountId, 'acct_firstUser')
   await stripe.listTestData(version, context)
   await stripe.createTestData(
     version,
@@ -271,11 +278,23 @@ try {
   assert.equal(await stripe.logout(version, context), 'Profile logged out')
   activeProfile = 'flyenv-second'
   await stripe.login(version, true, { ...context, profile: activeProfile })
+  assert.equal(
+    (await stripe.accountStatus(version, { ...context, profile: activeProfile })).accountId,
+    'acct_secondUser'
+  )
   assert.ok(
     scopedCalls.length > 10,
     'all account/resource commands exercise the real profile wrapper'
   )
   activeProfile = context.profile
+  const callsBeforeReuse = scopedCalls.length
+  assert.equal((await stripe.accountStatus(version, context)).accountId, 'acct_firstUser')
+  assert.equal(
+    scopedCalls.length,
+    callsBeforeReuse + 1,
+    'reusing a stored profile issues only whoami for that profile'
+  )
+  assert.ok(scopedCalls.at(-1)!.includes('whoami'))
   const until = async (condition: () => boolean) => {
     for (let i = 0; i < 100 && !condition(); i++) await new Promise((done) => setTimeout(done, 1))
     assert.ok(condition())

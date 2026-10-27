@@ -93,6 +93,18 @@
                     <div class="stripe-connect-actions">
                       <el-button
                         type="primary"
+                        :loading="stripe.accountCheck.running"
+                        :disabled="
+                          !stripe.loaded ||
+                          !version ||
+                          stripe.authentication.running ||
+                          stripe.disconnection.running ||
+                          stripe.preferenceChange.running
+                        "
+                        @click="stripe.checkConnection(version)"
+                        >{{ StripeT('useSavedConnection') }}</el-button
+                      >
+                      <el-button
                         :loading="stripe.authentication.running && stripe.loginAction === 'connect'"
                         :disabled="!stripe.loaded || !version || stripe.connectionBusy"
                         @click="stripe.login(version)"
@@ -110,19 +122,6 @@
                         @click="stripe.openTerminal(version)"
                       >
                         {{ StripeT('openCLI') }}
-                      </el-button>
-                      <el-button
-                        :loading="stripe.accountCheck.running"
-                        :disabled="
-                          !stripe.loaded ||
-                          !version ||
-                          stripe.authentication.running ||
-                          stripe.disconnection.running ||
-                          stripe.preferenceChange.running
-                        "
-                        @click="stripe.checkConnection(version)"
-                      >
-                        {{ StripeT('checkConnection') }}
                       </el-button>
                       <el-button
                         :loading="stripe.authentication.running && stripe.loginAction === 'fresh'"
@@ -157,6 +156,7 @@
                         </template>
                       </el-popconfirm>
                     </div>
+                    <p class="mt-3 text-xs opacity-75">{{ StripeT('savedConnectionHelp') }}</p>
                     <p class="mt-3 text-xs opacity-75">{{ StripeT('freshSessionHelp') }}</p>
                     <el-alert
                       v-if="stripe.manualApproval && stripe.browserUrl"

@@ -462,6 +462,7 @@ export class StripeController {
     }
     try {
       const selected = this.requireCLI(version)
+      this.accountSummary = ''
       const account: StripeAccountStatus = await this.accountCheck.run(
         this.request,
         'accountStatus',
