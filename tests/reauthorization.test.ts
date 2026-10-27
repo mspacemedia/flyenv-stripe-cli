@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseStripeAccount } from '../shared/Account'
@@ -147,11 +147,18 @@ try {
             path: 'env',
             namespace: 'fixture'
           }))
+          builder.onResolve({ filter: /^@fork\/util\/ServiceStart$/ }, () => ({
+            path: 'service',
+            namespace: 'fixture'
+          }))
+          builder.onResolve({ filter: /Command\.ts$/ }, ({ path }) => ({ path, namespace: 'file' }))
           builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({
             contents:
-              path === 'command'
-                ? 'export const runStripeCommand = (...args) => globalThis.__stripeReauthTest.run(...args); export const stripeEnvironment = env => env'
-                : 'export default {sync:async()=>({}),clean:()=>{}}',
+              path === 'service'
+                ? 'export const serviceStartSpawn = (...args) => globalThis.__stripeReauthTest.start(...args)'
+                : path === 'command'
+                  ? `export const runStripeCommand = (...args) => globalThis.__stripeReauthTest.run(...args); export {stripeEnvironment} from ${JSON.stringify(join(pluginRoot, 'fork/Command.ts'))}`
+                  : 'export default {sync:async()=>({STRIPE_API_KEY:"sk_test_fixture",STRIPE_CLI_TELEMETRY_OPTOUT:"1"}),clean:()=>{}}',
             loader: 'js'
           }))
         }
@@ -160,7 +167,7 @@ try {
   })
   const { default: stripe } = await import(pathToFileURL(forkFile).href)
   const progress: any[] = []
-  const version = { bin: process.execPath, enable: true }
+  const version = { bin: process.execPath, enable: true, version: '1.55.1' }
   assert.deepEqual(await stripe.login(version).on((value: unknown) => progress.push(value)), {
     reauthorization: true
   })
@@ -208,6 +215,132 @@ try {
     'fresh login retains the same config file'
   )
   await assert.rejects(stripe.login(version, 'yes'), /Invalid Stripe login mode/)
+  const context = { profile: 'flyenv-client', telemetry: true }
+  await assert.rejects(stripe.logout({ ...version, version: '1.54.0' }, context), /1.55.1 or newer/)
+  let activeProfile = context.profile
+  const scopedCalls: string[][] = []
+  let pauseLogout = false
+  let rejectLogout!: (error: Error) => void
+  fixture.run = async (
+    _bin: string,
+    args: string[],
+    _env: unknown,
+    _timeout: number,
+    _on: unknown,
+    _max: number,
+    telemetry: boolean
+  ) => {
+    scopedCalls.push(args)
+    assert.equal(args[args.indexOf('--project-name') + 1], activeProfile)
+    assert.equal(telemetry, true)
+    if (args.includes('--help')) return '--non-interactive --new-session --all-snapshot'
+    if (args.includes('--non-interactive'))
+      return JSON.stringify({
+        browser_url: 'https://access.stripe.com/stripecli/oauth2/device?user_code=ABCD-EFGH',
+        verification_code: 'ABCD-EFGH',
+        next_step: 'stripe login --complete-device'
+      })
+    if (args.includes('--complete-device')) return 'Connected'
+    if (args.includes('whoami')) return JSON.stringify(oauth)
+    if (args.includes('logout')) {
+      assert.equal(args.includes('--all'), false, 'logout must affect only one profile')
+      if (pauseLogout)
+        return new Promise((_done, fail) => {
+          rejectLogout = fail
+        })
+      return 'Profile logged out'
+    }
+    if (args.includes('list')) return JSON.stringify({ data: [], has_more: false })
+    if (args.includes('create')) return JSON.stringify({ id: 'prod_fixture', livemode: false })
+    if (args.includes('trigger')) return 'Triggered fixture'
+    throw new Error('Unexpected simulated command')
+  }
+  await stripe.login(version, true, context)
+  await stripe.accountStatus(version, context)
+  await stripe.listTestData(version, context)
+  await stripe.createTestData(
+    version,
+    {
+      resource: 'products',
+      fields: { name: 'Fixture' },
+      requestId: 'b54faf17-8517-4dd6-92d0-a95e002f2237'
+    },
+    context
+  )
+  await stripe.triggerEvent(version, 'payment_intent.succeeded', context)
+  assert.equal(await stripe.logout(version, context), 'Profile logged out')
+  activeProfile = 'flyenv-second'
+  await stripe.login(version, true, { ...context, profile: activeProfile })
+  assert.ok(
+    scopedCalls.length > 10,
+    'all account/resource commands exercise the real profile wrapper'
+  )
+  activeProfile = context.profile
+  const until = async (condition: () => boolean) => {
+    for (let i = 0; i < 100 && !condition(); i++) await new Promise((done) => setTimeout(done, 1))
+    assert.ok(condition())
+  }
+  pauseLogout = true
+  const logout = stripe.logout(version, context)
+  // Attach rejection immediately; later assertions inspect the terminal error.
+  const failedLogout = Promise.resolve(logout).catch((error) => error)
+  await until(() => !!rejectLogout)
+  await assert.rejects(stripe.logout(version, context), /Finish the current Stripe account/)
+  await assert.rejects(stripe.login(version, true, context), /Finish the current Stripe account/)
+  const settings = {
+    forwardTo: 'http://fixture.test/hook',
+    events: '',
+    skipVerify: false,
+    ...context
+  }
+  await assert.rejects(stripe._startServer(version, settings), /Finish the current Stripe account/)
+  rejectLogout(new Error('Revocation failed'))
+  assert.match(String(await failedLogout), /Revocation failed/)
+  pauseLogout = false
+  assert.equal(
+    await stripe.logout(version, context),
+    'Profile logged out',
+    'failure releases credential lock for explicit retry'
+  )
+  const pidFile = join(base, 'stripe/stripe.pid')
+  await writeFile(pidFile, String(process.pid))
+  await assert.rejects(stripe.logout(version, context), /Stop the Stripe listener/)
+  await assert.rejects(stripe.login(version, true, context), /Stop the Stripe listener/)
+  await rm(pidFile)
+  fixture.start = async (options: any) => {
+    assert.equal(options.execArgs[options.execArgs.indexOf('--project-name') + 1], context.profile)
+    assert.ok(options.execArgs.includes('listen'))
+    assert.equal(options.execEnv.STRIPE_CLI_TELEMETRY_OPTOUT, '0')
+    assert.equal(options.execEnv.STRIPE_API_KEY, '')
+    return { 'APP-Service-Start-PID': '12345' }
+  }
+  const realRuntime = stripe.runtime.bind(stripe)
+  stripe.runtime = async (options: unknown) => {
+    assert.deepEqual(options, context)
+    return { secret: 'whsec_fixture', output: 'Ready' }
+  }
+  assert.equal((await stripe._startServer(version, settings))['APP-Service-Start-PID'], '12345')
+  let finishStart!: (value: unknown) => void
+  fixture.start = () =>
+    new Promise((done) => {
+      finishStart = done
+    })
+  const starting = stripe._startServer(version, settings)
+  await until(() => !!finishStart)
+  await assert.rejects(stripe.logout(version, context), /Finish the current Stripe account/)
+  await assert.rejects(stripe.login(version, true, context), /Finish the current Stripe account/)
+  await assert.rejects(stripe._startServer(version, settings), /Finish the current Stripe account/)
+  finishStart({ 'APP-Service-Start-PID': '12345' })
+  await starting
+  stripe.runtime = realRuntime
+  await writeFile(join(base, 'stripe/listener.stdout.log'), 'whsec_default')
+  await writeFile(join(base, `stripe/${context.profile}.listener.stdout.log`), 'whsec_client')
+  assert.equal((await stripe.runtime()).secret, 'whsec_default')
+  assert.equal((await stripe.runtime(context)).secret, 'whsec_client')
+  await assert.rejects(
+    stripe.logout(version, { profile: '../default' }),
+    /Invalid Stripe connection profile/
+  )
   console.log('Stripe reauthorization, account status and browser IPC regression tests passed')
 } finally {
   ;(globalThis as any).Server = oldServer

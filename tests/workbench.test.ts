@@ -90,4 +90,14 @@ assert.ok(linux.includes('export -f stripe'))
 assert.ok(linux.includes('unset STRIPE_OTHER'))
 assert.ok(!linux.includes('STRIPE_BAD;COMMAND'))
 assert.throws(() => stripeTerminalCommand('bad\0path', 'config', 'win32'))
+for (const platform of ['win32', 'linux', 'darwin'] as const) {
+  const command = stripeTerminalCommand('/bin/stripe', '/config/cli.toml', platform, [], {
+    profile: 'flyenv-client',
+    telemetry: true
+  })
+  assert.ok(command.includes("'--project-name' 'flyenv-client'"))
+  assert.ok(
+    command.includes(platform === 'win32' ? "TELEMETRY_OPTOUT = '0'" : 'TELEMETRY_OPTOUT=0')
+  )
+}
 console.log('Stripe test-mode, argv isolation, amount and terminal quoting tests passed')

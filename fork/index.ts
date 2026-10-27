@@ -34,8 +34,16 @@ import {
 import { openStripeTerminal } from './Terminal'
 import { parseStripeAccount, type StripeAccountStatus } from '../shared/Account'
 import { stripeRuntimeFromLogs } from '../shared/Authentication'
+import {
+  stripeContext,
+  stripeProfileArgs,
+  assertStripeProfileSupport,
+  type StripeContext
+} from '../shared/Connections'
 
 class Stripe extends Base {
+  private credentialsChanging = false
+  private listenerStarting = false
   constructor() {
     super()
     this.type = 'stripe'
@@ -47,46 +55,89 @@ class Stripe extends Base {
   private baseDir() {
     return join(global.Server.BaseDir!, 'stripe')
   }
-  private configArgs() {
-    return ['--config', join(this.baseDir(), 'cli.toml')]
+  private configArgs(context: StripeContext = {}) {
+    return ['--config', join(this.baseDir(), 'cli.toml'), ...stripeProfileArgs(context)]
   }
-  private logPaths() {
-    return ['listener.stdout.log', 'listener.stderr.log'].map((name) => join(this.baseDir(), name))
+  private async cli(
+    version: SoftInstalled,
+    args: string[],
+    context: StripeContext = {},
+    timeout = 30_000,
+    onOutput?: (text: string) => void,
+    maxOutput = 65_536
+  ) {
+    const options = stripeContext(context)
+    assertStripeProfileSupport(version.version, options)
+    if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
+    return runStripeCommand(
+      version.bin,
+      [...this.configArgs(options), ...args],
+      await EnvSync.sync(),
+      timeout,
+      onOutput,
+      maxOutput,
+      options.telemetry
+    )
+  }
+  private async withCredentials(task: () => Promise<void>) {
+    if (this.credentialsChanging || this.listenerStarting)
+      throw new Error('Finish the current Stripe account or listener action first.')
+    this.credentialsChanging = true
+    try {
+      for (const file of [this.appPidFile(), this.pidPath || join(this.baseDir(), 'stripe.pid')]) {
+        const pid = await this.readPidFromFile(file)
+        if (!pid) continue
+        if (!/^[1-9]\d*$/.test(pid))
+          throw new Error('Stop the Stripe listener before changing accounts.')
+        try {
+          process.kill(Number(pid), 0)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') continue
+          throw error
+        }
+        throw new Error('Stop the Stripe listener before changing accounts.')
+      }
+      await task()
+    } finally {
+      this.credentialsChanging = false
+    }
+  }
+  private logPaths(context: StripeContext = {}) {
+    const profile = stripeContext(context).profile
+    return ['listener.stdout.log', 'listener.stderr.log'].map((name) =>
+      join(this.baseDir(), profile === 'default' ? name : `${profile}.${name}`)
+    )
   }
 
-  triggerEvent(version: SoftInstalled, event: string) {
+  triggerEvent(version: SoftInstalled, event: string, context: StripeContext = {}) {
     return new ForkPromise<string>(async (resolve) => {
       const args = sampleEventArgs(event)
-      const output = await runStripeCommand(
-        version.bin,
-        [...this.configArgs(), ...args],
-        await EnvSync.sync(),
-        120_000
-      )
+      const output = await this.cli(version, args, context, 120_000)
       resolve(redactStripeOutput(output))
     })
   }
 
-  openTerminal(version: SoftInstalled) {
+  openTerminal(version: SoftInstalled, context: StripeContext = {}) {
     return new ForkPromise<boolean>(async (resolve) => {
+      assertStripeProfileSupport(version.version, context)
       await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
-      await openStripeTerminal(version.bin, join(this.baseDir(), 'cli.toml'))
+      await openStripeTerminal(version.bin, join(this.baseDir(), 'cli.toml'), context)
       resolve(true)
     })
   }
 
-  listTestData(version: SoftInstalled) {
+  listTestData(version: SoftInstalled, context: StripeContext = {}) {
     return new ForkPromise<StripeDataRefresh>(async (resolve) => {
       if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
-      const env = await EnvSync.sync()
+      stripeContext(context)
       const result: StripeDataRefresh = { lists: {}, errors: [], hasMore: [] }
       await Promise.all(
         stripeResources.map(async (resource) => {
           try {
-            const output = await runStripeCommand(
-              version.bin,
-              [...this.configArgs(), ...resourceListArgs(resource)],
-              env,
+            const output = await this.cli(
+              version,
+              resourceListArgs(resource),
+              context,
               30_000,
               undefined,
               2_000_000
@@ -112,17 +163,10 @@ class Stripe extends Base {
     })
   }
 
-  createTestData(version: SoftInstalled, request: StripeCreation) {
+  createTestData(version: SoftInstalled, request: StripeCreation, context: StripeContext = {}) {
     return new ForkPromise(async (resolve) => {
       const args = resourceCreateArgs(request)
-      const output = await runStripeCommand(
-        version.bin,
-        [...this.configArgs(), ...args],
-        await EnvSync.sync(),
-        60_000,
-        undefined,
-        2_000_000
-      )
+      const output = await this.cli(version, args, context, 60_000, undefined, 2_000_000)
       resolve(stripeResource(parseStripeJSON(output)))
     })
   }
@@ -295,80 +339,82 @@ class Stripe extends Base {
     })
   }
 
-  accountStatus(version: SoftInstalled) {
+  logout(version: SoftInstalled, context: StripeContext = {}) {
+    return new ForkPromise<string>((resolve) =>
+      this.withCredentials(async () => {
+        const output = await this.cli(version, ['logout'], context, 60_000)
+        resolve(
+          redactStripeOutput(output).trim() || 'Stripe CLI credentials cleared for this connection.'
+        )
+      })
+    )
+  }
+
+  accountStatus(version: SoftInstalled, context: StripeContext = {}) {
     return new ForkPromise<StripeAccountStatus>(async (resolve) => {
       if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
-      const output = await runStripeCommand(
-        version.bin,
-        [...this.configArgs(), 'whoami', '--format', 'json'],
-        await EnvSync.sync(),
-        30_000
-      )
+      const output = await this.cli(version, ['whoami', '--format', 'json'], context, 30_000)
       resolve(parseStripeAccount(output))
     })
   }
 
-  login(version: SoftInstalled, freshSession = false) {
-    return new ForkPromise<string | { reauthorization: true }>(async (resolve, _reject, on) => {
-      if (typeof freshSession !== 'boolean') throw new Error('Invalid Stripe login mode.')
-      if (!existsSync(version.bin))
-        throw new Error('Install and select a Stripe CLI version first.')
-      await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
-      const env = await EnvSync.sync()
-      const config = this.configArgs()
-      const help = await runStripeCommand(version.bin, [...config, 'login', '--help'], env)
-      if (freshSession && !help.includes('--new-session'))
-        throw new Error(
-          'This Stripe CLI version does not support fresh sessions. Install a newer CLI version first.'
-        )
-      if (help.includes('--non-interactive')) {
-        const output = await runStripeCommand(
-          version.bin,
-          [...config, 'login', '--non-interactive', ...(freshSession ? ['--new-session'] : [])],
-          env
-        )
-        const { browserUrl, verificationCode, args } = parseStripeLogin(output)
-        const reauthorization = args[1] === '--complete-reauth'
-        on({ browserUrl, verificationCode, reauthorization })
-        if (reauthorization) {
-          // CLI polls only for an account-list change; approving unchanged access
-          // has no completion signal. Let the user check their current account.
-          resolve({ reauthorization: true })
-          return
-        }
-        const completed = await runStripeCommand(
-          version.bin,
-          [...config, ...args],
-          env,
-          STRIPE_LOGIN_WAIT_TIMEOUT_MS
-        )
-        resolve(redactStripeOutput(completed).trim() || 'Stripe account connected.')
-      } else {
-        // Older CLI releases wait for browser approval in a single browserless command.
-        let lastUrl = ''
-        const output = await runStripeCommand(
-          version.bin,
-          [...config, 'login', '--browserless', ...(freshSession ? ['--new-session'] : [])],
-          env,
-          STRIPE_LOGIN_WAIT_TIMEOUT_MS,
-          (text) => {
-            const match = text.match(/https:\/\/dashboard\.stripe\.com\/stripecli\/[^\s<>"']+/)
-            if (match && match[0] !== lastUrl) {
-              lastUrl = stripeLoginUrl(match[0])
-              on({
-                browserUrl: lastUrl,
-                verificationCode: text.match(/pairing code is:?\s*([^\s]+)/i)?.[1] ?? ''
-              })
-            }
+  login(version: SoftInstalled, freshSession = false, context: StripeContext = {}) {
+    return new ForkPromise<string | { reauthorization: true }>((resolve, _reject, on) =>
+      this.withCredentials(async () => {
+        if (typeof freshSession !== 'boolean') throw new Error('Invalid Stripe login mode.')
+        if (!existsSync(version.bin))
+          throw new Error('Install and select a Stripe CLI version first.')
+        await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
+        const options = stripeContext(context)
+        const help = await this.cli(version, ['login', '--help'], options)
+        if (freshSession && !help.includes('--new-session'))
+          throw new Error(
+            'This Stripe CLI version does not support fresh sessions. Install a newer CLI version first.'
+          )
+        if (help.includes('--non-interactive')) {
+          const output = await this.cli(
+            version,
+            ['login', '--non-interactive', ...(freshSession ? ['--new-session'] : [])],
+            options
+          )
+          const { browserUrl, verificationCode, args } = parseStripeLogin(output)
+          const reauthorization = args[1] === '--complete-reauth'
+          on({ browserUrl, verificationCode, reauthorization })
+          if (reauthorization) {
+            // CLI polls only for an account-list change; approving unchanged access
+            // has no completion signal. Let the user check their current account.
+            resolve({ reauthorization: true })
+            return
           }
-        )
-        resolve(
-          redactStripeOutput(output)
-            .replace(/https:\/\/[^\s]+/g, '')
-            .trim()
-        )
-      }
-    })
+          const completed = await this.cli(version, args, options, STRIPE_LOGIN_WAIT_TIMEOUT_MS)
+          resolve(redactStripeOutput(completed).trim() || 'Stripe account connected.')
+        } else {
+          // Older CLI releases wait for browser approval in a single browserless command.
+          let lastUrl = ''
+          const output = await this.cli(
+            version,
+            ['login', '--browserless', ...(freshSession ? ['--new-session'] : [])],
+            options,
+            STRIPE_LOGIN_WAIT_TIMEOUT_MS,
+            (text) => {
+              const match = text.match(/https:\/\/dashboard\.stripe\.com\/stripecli\/[^\s<>"']+/)
+              if (match && match[0] !== lastUrl) {
+                lastUrl = stripeLoginUrl(match[0])
+                on({
+                  browserUrl: lastUrl,
+                  verificationCode: text.match(/pairing code is:?\s*([^\s]+)/i)?.[1] ?? ''
+                })
+              }
+            }
+          )
+          resolve(
+            redactStripeOutput(output)
+              .replace(/https:\/\/[^\s]+/g, '')
+              .trim()
+          )
+        }
+      })
+    )
   }
 
   private async readLog(file: string): Promise<string> {
@@ -394,11 +440,11 @@ class Stripe extends Base {
     }
   }
 
-  runtime() {
+  runtime(context: StripeContext = {}) {
     return new ForkPromise<StripeRuntime>(async (resolve) => {
-      const output = (await Promise.all(this.logPaths().map((file) => this.readLog(file)))).join(
-        '\n'
-      )
+      const output = (
+        await Promise.all(this.logPaths(context).map((file) => this.readLog(file)))
+      ).join('\n')
       resolve(stripeRuntimeFromLogs(output))
     })
   }
@@ -409,35 +455,43 @@ class Stripe extends Base {
 
   _startServer(version: SoftInstalled, settings: StripeSettings) {
     return new ForkPromise(async (resolve, _reject, on) => {
-      listenerArgs(settings)
-      const env = await EnvSync.sync()
-      const help = await runStripeCommand(version.bin, ['listen', '--help'], env)
-      const args = listenerArgs(settings, help.includes('--all-snapshot'))
-      await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
-      const [outFile, errFile] = this.logPaths()
-      // Clear the previous session's secret before attempting another listener.
-      await Promise.all([outFile, errFile].map((file) => writeFile(file, '', { mode: 0o600 })))
-      const execEnv = stripeEnvironment(env) as Record<string, string>
-      const started = await startStripeListener(
-        () =>
-          serviceStartSpawn({
-            version,
-            pidPath: this.pidPath,
-            baseDir: this.baseDir(),
-            bin: version.bin,
-            cwd: dirname(version.bin),
-            execArgs: [...this.configArgs(), ...args],
-            execEnv,
-            on,
-            outFile,
-            errFile,
-            waitTime: 500,
-            sensitive: true
-          }),
-        () => this.runtime(),
-        (pid) => this._stopServer({ ...version, pid }).on(on)
-      )
-      resolve(started)
+      if (this.credentialsChanging || this.listenerStarting)
+        throw new Error('Finish the current Stripe account or listener action first.')
+      this.listenerStarting = true
+      try {
+        listenerArgs(settings)
+        const context = stripeContext(settings)
+        const env = await EnvSync.sync()
+        const help = await this.cli(version, ['listen', '--help'], context)
+        const args = listenerArgs(settings, help.includes('--all-snapshot'))
+        await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
+        const [outFile, errFile] = this.logPaths(context)
+        // Clear the previous session's secret before attempting another listener.
+        await Promise.all([outFile, errFile].map((file) => writeFile(file, '', { mode: 0o600 })))
+        const execEnv = stripeEnvironment(env, context.telemetry) as Record<string, string>
+        const started = await startStripeListener(
+          () =>
+            serviceStartSpawn({
+              version,
+              pidPath: this.pidPath,
+              baseDir: this.baseDir(),
+              bin: version.bin,
+              cwd: dirname(version.bin),
+              execArgs: [...this.configArgs(context), ...args],
+              execEnv,
+              on,
+              outFile,
+              errFile,
+              waitTime: 500,
+              sensitive: true
+            }),
+          () => this.runtime(context),
+          (pid) => this._stopServer({ ...version, pid }).on(on)
+        )
+        resolve(started)
+      } finally {
+        this.listenerStarting = false
+      }
     })
   }
 }

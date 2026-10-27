@@ -12,6 +12,7 @@ import { hasStripeAuthenticationFailure, stripeRuntimeFromLogs } from '../shared
 import { StripeOperation, type StripeRequest } from '../render/Operation'
 import { StripeRuntimePolling } from '../render/Polling'
 import { stripeSiteTargets } from '../render/Sites'
+import { stripeContext, stripePreferences, stripeProfileArgs } from '../shared/Connections'
 import type { StripeRuntime } from '../shared/types'
 import { createStripeT } from '../lang'
 import {
@@ -298,7 +299,7 @@ for (const output of [
 assert.deepEqual(stripeRuntimeFromLogs('\n'), { secret: '', output: '\n' })
 const rejectedRuntime = stripeRuntimeFromLogs(`Ready whsec_fixture\n${authFailure}`)
 assert.equal(rejectedRuntime.secret, '')
-assert.match(rejectedRuntime.authError!, /Reconnect with a fresh session/)
+assert.match(rejectedRuntime.authError!, /Sign in to another account/)
 let authStops = 0
 await assert.rejects(
   startStripeListener(
@@ -308,7 +309,7 @@ await assert.rejects(
       authStops++
     }
   ),
-  /Reconnect with a fresh session/
+  /Sign in to another account/
 )
 assert.equal(authStops, 1)
 await assert.rejects(
@@ -323,7 +324,7 @@ await assert.rejects(
       authStops++
     }
   ),
-  /Reconnect with a fresh session/
+  /Sign in to another account/
 )
 assert.equal(authStops, 1, 'a failed start without a PID cannot stop an unknown child')
 await assert.rejects(
@@ -334,7 +335,7 @@ await assert.rejects(
       throw new Error('termination denied')
     }
   ),
-  /Reconnect with a fresh session[\s\S]*cleanup failed: Error: termination denied/
+  /Sign in to another account[\s\S]*cleanup failed: Error: termination denied/
 )
 let stopped = 0
 let clock = 0
@@ -411,6 +412,58 @@ assert.equal(env.STRIPE_PROJECT_NAME, '')
 assert.equal(env.STRIPE_CLI_TELEMETRY_OPTOUT, '1')
 assert.equal(env.STRIPE_NO_AUTO_UPDATE, '1')
 assert.equal(env.STRIPE_TELEMETRY_URL, '')
+assert.deepEqual(stripeContext(), { profile: 'default', telemetry: false })
+assert.deepEqual(stripeProfileArgs({ profile: 'client_1' }), ['--project-name', 'client_1'])
+assert.deepEqual(stripeProfileArgs(), [])
+for (const profile of ['../default', 'a.b', '--live', 'a;command', '', 123]) {
+  assert.throws(() => stripeContext({ profile: profile as string }))
+}
+assert.throws(() => stripeContext({ telemetry: 'yes' as any }))
+assert.equal(stripePreferences(undefined).telemetry, false)
+assert.throws(() => stripePreferences({ selected: 'missing', connections: [], telemetry: false }))
+assert.throws(() =>
+  stripePreferences({
+    selected: 'default',
+    connections: [
+      { profile: 'default', label: 'One' },
+      { profile: 'default', label: 'Two' }
+    ],
+    telemetry: false
+  })
+)
+assert.deepEqual(
+  stripePreferences({
+    selected: 'default',
+    connections: [{ profile: 'default', label: 'Default', secret: 'discard' }],
+    telemetry: false,
+    secret: 'discard'
+  }),
+  { selected: 'default', connections: [{ profile: 'default', label: 'Default' }], telemetry: false }
+)
+assert.equal(
+  stripeEnvironment({ STRIPE_CLI_TELEMETRY_OPTOUT: '1' }, true).STRIPE_CLI_TELEMETRY_OPTOUT,
+  '0'
+)
+assert.equal(
+  await runStripeCommand(
+    process.execPath,
+    ['-e', 'process.stdout.write(process.env.STRIPE_CLI_TELEMETRY_OPTOUT)'],
+    process.env
+  ),
+  '1'
+)
+assert.equal(
+  await runStripeCommand(
+    process.execPath,
+    ['-e', 'process.stdout.write(process.env.STRIPE_CLI_TELEMETRY_OPTOUT)'],
+    process.env,
+    30000,
+    undefined,
+    65536,
+    true
+  ),
+  '0'
+)
 const exitsBefore = process.listenerCount('exit')
 assert.equal(
   await runStripeCommand(process.execPath, ['-e', 'process.stdout.write("okay")'], process.env),

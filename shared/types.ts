@@ -1,4 +1,6 @@
-export type StripeSettings = {
+import type { StripeContext } from './Connections'
+
+export type StripeSettings = StripeContext & {
   forwardTo: string
   events: string
   skipVerify: boolean

@@ -8,11 +8,16 @@ import { resolveWindowsPowerShellPath } from '@shared/WindowsSystemPaths'
 import { runMacTerminalCommand } from '@fork/util/MacTerminal'
 import { stripeTerminalCommand } from '../shared/Terminal'
 import { stripeEnvironment } from './Command'
+import { stripeContext, type StripeContext } from '../shared/Connections'
 
-export async function openStripeTerminal(binary: string, config: string): Promise<void> {
+export async function openStripeTerminal(
+  binary: string,
+  config: string,
+  context: StripeContext = {}
+): Promise<void> {
   if (!(await stat(binary)).isFile()) throw new Error('Select an installed Stripe CLI.')
-  const env = stripeEnvironment(await EnvSync.sync())
-  const command = stripeTerminalCommand(binary, config, process.platform, Object.keys(env))
+  const env = stripeEnvironment(await EnvSync.sync(), stripeContext(context).telemetry)
+  const command = stripeTerminalCommand(binary, config, process.platform, Object.keys(env), context)
   if (process.platform === 'win32') {
     const powershell = resolveWindowsPowerShellPath()
     const quoted = `'${powershell.replace(/'/g, "''")}'`

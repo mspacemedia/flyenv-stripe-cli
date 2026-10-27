@@ -1,3 +1,5 @@
+import { stripeContext, stripeProfileArgs, type StripeContext } from './Connections'
+
 const knownOverrides = [
   'STRIPE_API_KEY',
   'STRIPE_LIVE',
@@ -12,17 +14,19 @@ export function stripeTerminalCommand(
   binary: string,
   config: string,
   platform: NodeJS.Platform,
-  inheritedKeys: string[] = []
+  inheritedKeys: string[] = [],
+  context: StripeContext = {}
 ): string {
   if ([binary, config].some((value) => !value || value.includes('\0')))
     throw new Error('Invalid Stripe CLI path.')
+  const optout = stripeContext(context).telemetry ? '0' : '1'
   if (platform === 'win32') {
     const quote = (value: string) => `'${value.replace(/'/g, "''")}'`
     return [
       'Get-ChildItem Env:STRIPE_* | Remove-Item -ErrorAction SilentlyContinue',
-      "$env:STRIPE_CLI_TELEMETRY_OPTOUT = '1'",
+      `$env:STRIPE_CLI_TELEMETRY_OPTOUT = '${optout}'`,
       "$env:STRIPE_NO_AUTO_UPDATE = '1'",
-      `function global:stripe { & ${quote(binary)} '--config' ${quote(config)} @args }`,
+      `function global:stripe { & ${quote(binary)} '--config' ${quote(config)} ${stripeProfileArgs(context).map(quote).join(' ')} @args }`,
       "Write-Host 'FlyEnv Stripe CLI: same account configuration as the plugin.'",
       "Write-Host 'Try: stripe --help, stripe trigger payment_intent.succeeded, stripe products list'",
       'stripe --version'
@@ -34,8 +38,8 @@ export function stripeTerminalCommand(
   )
   return [
     ...keys.map((key) => `unset ${key}`),
-    'export STRIPE_CLI_TELEMETRY_OPTOUT=1 STRIPE_NO_AUTO_UPDATE=1',
-    `stripe() { ${quote(binary)} --config ${quote(config)} "$@"; }`,
+    `export STRIPE_CLI_TELEMETRY_OPTOUT=${optout} STRIPE_NO_AUTO_UPDATE=1`,
+    `stripe() { ${quote(binary)} --config ${quote(config)} ${stripeProfileArgs(context).map(quote).join(' ')} "$@"; }`,
     ...(platform === 'linux' ? ['export -f stripe'] : []),
     "printf '%s\\n' 'FlyEnv Stripe CLI: same account configuration as the plugin.'",
     "printf '%s\\n' 'Try: stripe --help, stripe trigger payment_intent.succeeded, stripe products list'",

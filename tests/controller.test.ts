@@ -18,7 +18,7 @@ try {
   const bridges: Record<string, string> = {
     '@/util/Index': 'export const reactiveBind = value => value',
     '@/util/Storage':
-      'export const StorageGetAsync = async () => ({}); export const StorageSetAsync = async () => {}',
+      'export const StorageGetAsync = (...args) => globalThis.__stripePairingTest.read(...args); export const StorageSetAsync = (...args) => globalThis.__stripePairingTest.save(...args)',
     '@/util/ForkTerminalRequest':
       'export const forkTerminalRequest = (...args) => globalThis.__stripePairingTest.request(...args)',
     '@/util/NodeFn':
@@ -27,7 +27,8 @@ try {
       'export const MessageError = value => globalThis.__stripePairingTest.errors.push(value); export const MessageSuccess = value => globalThis.__stripePairingTest.successes.push(value)',
     '@lang/index':
       'export const I18nT = key => key; export const AppI18n = () => ({global: {locale: "en"}})',
-    '@/store/brew': 'export const BrewStore = () => ({module: () => ({installed: []})})',
+    '@/store/brew':
+      'export const BrewStore = () => ({module: () => globalThis.__stripePairingTest.module})',
     './Browser':
       'export const openStripeBrowser = (...args) => globalThis.__stripePairingTest.open(...args)'
   }
@@ -60,6 +61,9 @@ try {
   })
   const { StripeController } = await import(pathToFileURL(output).href)
   const controller = new StripeController()
+  mock.read = async () => ({})
+  mock.save = async () => {}
+  mock.module = { installed: [], starting: false }
   const version = { enable: true, bin: 'fixture-stripe', version: '1.55.1' }
   const tick = () => new Promise<void>((done) => setImmediate(done))
   const errors: string[] = []
@@ -290,7 +294,146 @@ try {
   )
   assert.notEqual(creationIds[0], creationIds.at(-1))
   assert.equal(controller.dataCreation.running, false)
-  console.log('Stripe pairing and workbench controller regression tests passed')
+  const preferencesController = new StripeController()
+  const oldSettings = { forwardTo: 'http://fixture.test/hook', events: '', skipVerify: false }
+  mock.read = async (key: string) => {
+    if (key === 'flyenv-stripe-settings-v1') return oldSettings
+    throw new Error('no found')
+  }
+  await preferencesController.load()
+  assert.deepEqual(preferencesController.context, { profile: 'default', telemetry: false })
+  assert.equal(preferencesController.settings.forwardTo, oldSettings.forwardTo)
+  let stored: any
+  let saveCalls = 0
+  let finishSave!: () => void
+  mock.save = (key: string, value: unknown) => {
+    assert.equal(key, 'flyenv-stripe-connections-v1')
+    saveCalls++
+    stored = value
+    return new Promise<void>((done) => {
+      finishSave = done
+    })
+  }
+  const adding = preferencesController.addConnection('Client sandbox')
+  await tick()
+  assert.equal(preferencesController.preferenceChange.running, true)
+  assert.equal(
+    preferencesController.preferences.selected,
+    'default',
+    'selection changes only after storage succeeds'
+  )
+  await preferencesController.addConnection('Duplicate while saving')
+  await preferencesController.login(version)
+  await assert.rejects(preferencesController.startParams(), /Stop the Stripe listener/)
+  assert.equal(saveCalls, 1)
+  finishSave()
+  await adding
+  const clientProfile = preferencesController.context.profile
+  assert.match(clientProfile, /^flyenv-[a-f0-9-]+$/)
+  assert.deepEqual(Object.keys(stored).sort(), ['connections', 'selected', 'telemetry'])
+  assert.equal(stored.connections.length, 2)
+  const savedSnapshot = JSON.stringify(preferencesController.preferences)
+  mock.save = async () => {
+    throw new Error('Storage unavailable')
+  }
+  await preferencesController.selectConnection('default')
+  assert.equal(JSON.stringify(preferencesController.preferences), savedSnapshot)
+  assert.equal(preferencesController.preferenceChange.error, 'Storage unavailable')
+  mock.save = async (_key: string, value: any) => {
+    stored = value
+  }
+  await preferencesController.setTelemetry(true)
+  assert.equal(preferencesController.context.telemetry, true)
+  assert.equal(preferencesController.preferenceChange.error, '')
+  mock.module.installed = [{ run: true }]
+  await preferencesController.setTelemetry(false)
+  await preferencesController.selectConnection('default')
+  await preferencesController.disconnect(version)
+  assert.equal(preferencesController.context.telemetry, true)
+  assert.equal(preferencesController.context.profile, clientProfile)
+  mock.module.installed = []
+  const requestContexts: any[] = []
+  mock.request = async (_command: string, args: any[]) => {
+    if (args[0] === 'runtime')
+      return { code: 0, data: { secret: 'whsec_stale', output: 'old log' } }
+    requestContexts.push(args.at(-1))
+    if (args[0] === 'accountStatus')
+      return { code: 0, data: { accountId: 'acct_fixture', displayName: 'Client', mode: 'test' } }
+    if (args[0] === 'listTestData') return { code: 0, data: { lists: {}, errors: [], hasMore: [] } }
+    if (args[0] === 'createTestData') return { code: 0, data: { id: 'prod_fixture' } }
+    return { code: 0, data: 'fixture success' }
+  }
+  await preferencesController.checkConnection(version)
+  await preferencesController.openTerminal(version)
+  await preferencesController.triggerEvent(version, 'payment_intent.succeeded')
+  await preferencesController.createTestData(version, 'products', { name: 'Fixture' })
+  for (const context of requestContexts)
+    assert.deepEqual(context, { profile: clientProfile, telemetry: true })
+  assert.deepEqual(await preferencesController.startParams(), [
+    { ...oldSettings, profile: clientProfile, telemetry: true }
+  ])
+  let logouts = 0
+  let finishLogout!: (value: any) => void
+  mock.request = (_command: string, args: any[]) => {
+    assert.equal(args[0], 'logout')
+    assert.deepEqual(args[2], { profile: clientProfile, telemetry: true })
+    logouts++
+    return new Promise((done) => {
+      finishLogout = done
+    })
+  }
+  const logout = preferencesController.disconnect(version)
+  await tick()
+  preferencesController.attach()
+  await tick()
+  preferencesController.detach()
+  assert.equal(
+    preferencesController.disconnection.running,
+    true,
+    'page re-entry retains pending logout'
+  )
+  await preferencesController.disconnect(version)
+  await preferencesController.login(version, true)
+  await preferencesController.setTelemetry(false)
+  await preferencesController.selectConnection('default')
+  await assert.rejects(preferencesController.startParams(), /Stop the Stripe listener/)
+  assert.equal(logouts, 1, 'duplicate logout and dependent actions cannot replay revocation')
+  assert.equal(preferencesController.accountSummary, '')
+  assert.equal(preferencesController.createdResource, undefined)
+  finishLogout({ code: 1, msg: 'Network unavailable; account state unknown' })
+  await logout
+  assert.match(preferencesController.disconnection.error, /state unknown/)
+  assert.equal(preferencesController.disconnection.running, false)
+  const retryLogout = preferencesController.disconnect(version)
+  await tick()
+  finishLogout({ code: 0, data: 'Logged out. Warning: remote revocation failed.' })
+  await retryLogout
+  assert.equal(logouts, 2)
+  assert.equal(preferencesController.disconnection.error, '')
+  assert.match(preferencesController.disconnectOutput, /Warning: remote revocation failed/)
+  assert.equal(
+    preferencesController.preferences.connections.length,
+    2,
+    'logout keeps saved connections'
+  )
+  await preferencesController.refreshRuntime()
+  assert.equal(
+    preferencesController.secret,
+    '',
+    'old runtime cannot restore a logged-out signing secret'
+  )
+  await preferencesController.selectConnection('default')
+  assert.deepEqual(preferencesController.context, { profile: 'default', telemetry: true })
+  assert.equal(preferencesController.disconnectOutput, '')
+  mock.read = async () => {
+    throw new Error('Storage read denied')
+  }
+  const broken = new StripeController()
+  await assert.rejects(broken.load(), /Storage read denied/)
+  assert.equal(broken.loaded, false)
+  console.log(
+    'Stripe pairing, saved connections, logout, telemetry and workbench controller regression tests passed'
+  )
 } finally {
   delete (globalThis as any).__stripePairingTest
   await rm(temporary, { recursive: true, force: true })

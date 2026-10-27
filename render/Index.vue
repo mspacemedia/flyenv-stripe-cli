@@ -28,6 +28,39 @@
                 show-icon
               />
               <el-form label-position="top" @submit.prevent>
+                <el-form-item :label="StripeT('savedConnections')">
+                  <el-select
+                    :model-value="stripe.preferences.selected"
+                    :disabled="!stripe.loaded || stripe.connectionBusy"
+                    class="w-full"
+                    @change="stripe.selectConnection($event)"
+                  >
+                    <el-option
+                      v-for="item in stripe.preferences.connections"
+                      :key="item.profile"
+                      :value="item.profile"
+                      :label="
+                        item.profile === 'default' ? StripeT('defaultConnection') : item.label
+                      "
+                    />
+                  </el-select>
+                </el-form-item>
+                <div class="mb-3 flex flex-wrap gap-2">
+                  <el-input
+                    v-model="newConnectionName"
+                    :placeholder="StripeT('connectionName')"
+                    :maxlength="80"
+                    :disabled="!stripe.loaded || stripe.connectionBusy"
+                    class="!w-64"
+                  />
+                  <el-button
+                    :loading="stripe.preferenceChange.running"
+                    :disabled="!stripe.loaded || stripe.connectionBusy || !newConnectionName.trim()"
+                    @click="stripe.addConnection(newConnectionName)"
+                    >{{ StripeT('addConnection') }}</el-button
+                  >
+                </div>
+                <p class="mb-4 text-xs opacity-75">{{ StripeT('connectionsHelp') }}</p>
                 <el-form-item :label="StripeT('cliVersion')">
                   <el-select
                     v-model="selectedBin"
@@ -38,7 +71,9 @@
                       stripe.dataCreation.running ||
                       stripe.testEvent.running ||
                       stripe.dataRefresh.running ||
-                      stripe.accountCheck.running
+                      stripe.accountCheck.running ||
+                      stripe.disconnection.running ||
+                      stripe.preferenceChange.running
                     "
                     class="w-full"
                   >
@@ -55,31 +90,60 @@
                 <el-button
                   type="primary"
                   :loading="stripe.authentication.running"
-                  :disabled="!version || busy || !!active"
+                  :disabled="!stripe.loaded || !version || stripe.connectionBusy"
                   @click="stripe.login(version)"
                   >{{ StripeT('connect') }}</el-button
                 >
                 <el-button
                   :loading="stripe.terminal.running"
-                  :disabled="!version || stripe.authentication.running"
+                  :disabled="
+                    !stripe.loaded ||
+                    !version ||
+                    stripe.authentication.running ||
+                    stripe.disconnection.running ||
+                    stripe.preferenceChange.running
+                  "
                   @click="stripe.openTerminal(version)"
                 >
                   {{ StripeT('openCLI') }}
                 </el-button>
                 <el-button
                   :loading="stripe.accountCheck.running"
-                  :disabled="!version || stripe.authentication.running"
+                  :disabled="
+                    !stripe.loaded ||
+                    !version ||
+                    stripe.authentication.running ||
+                    stripe.disconnection.running ||
+                    stripe.preferenceChange.running
+                  "
                   @click="stripe.checkConnection(version)"
                 >
                   {{ StripeT('checkConnection') }}
                 </el-button>
                 <el-button
                   :loading="stripe.authentication.running"
-                  :disabled="!version || busy || !!active || stripe.accountCheck.running"
+                  :disabled="!stripe.loaded || !version || stripe.connectionBusy"
                   @click="stripe.login(version, true)"
                 >
                   {{ StripeT('freshSession') }}
                 </el-button>
+                <el-popconfirm
+                  :title="StripeT('disconnectConfirm')"
+                  :confirm-button-text="StripeT('disconnect')"
+                  :cancel-button-text="I18nT('base.cancel')"
+                  :width="340"
+                  @confirm="stripe.disconnect(version)"
+                >
+                  <template #reference>
+                    <el-button
+                      type="danger"
+                      plain
+                      :loading="stripe.disconnection.running"
+                      :disabled="!stripe.loaded || !version || stripe.connectionBusy"
+                      >{{ StripeT('disconnect') }}</el-button
+                    >
+                  </template>
+                </el-popconfirm>
                 <p class="mt-3 text-xs opacity-75">{{ StripeT('freshSessionHelp') }}</p>
                 <el-alert
                   v-if="stripe.reauthorizationPending"
@@ -119,16 +183,45 @@
                 }}</p>
                 <el-alert
                   v-if="
-                    stripe.authentication.error || stripe.browserError || stripe.accountCheck.error
+                    stripe.authentication.error ||
+                    stripe.browserError ||
+                    stripe.accountCheck.error ||
+                    stripe.disconnection.error ||
+                    stripe.preferenceChange.error
                   "
                   class="mt-3"
                   :title="
-                    stripe.authentication.error || stripe.browserError || stripe.accountCheck.error
+                    stripe.authentication.error ||
+                    stripe.browserError ||
+                    stripe.accountCheck.error ||
+                    stripe.disconnection.error ||
+                    stripe.preferenceChange.error
                   "
                   type="error"
                   :closable="false"
                 />
+                <pre v-if="stripe.disconnectOutput" class="stripe-log mt-3">{{
+                  stripe.disconnectOutput
+                }}</pre>
               </el-form>
+            </el-card>
+            <el-card class="mt-4">
+              <template #header>{{ StripeT('telemetryTitle') }}</template>
+              <el-switch
+                :model-value="stripe.preferences.telemetry"
+                :disabled="!stripe.loaded || stripe.connectionBusy"
+                :active-text="StripeT('telemetryEnabled')"
+                :inactive-text="StripeT('telemetryDisabled')"
+                @change="stripe.setTelemetry($event === true)"
+              />
+              <p class="mt-3 text-sm opacity-75">{{ StripeT('telemetryHelp') }}</p>
+              <el-link
+                class="mt-2"
+                href="https://docs.stripe.com/cli/telemetry"
+                target="_blank"
+                rel="noopener noreferrer"
+                >{{ StripeT('telemetryDocs') }}</el-link
+              >
             </el-card>
             <el-card class="mt-4">
               <template #header>{{ StripeT('forwarding') }}</template>
@@ -288,6 +381,7 @@
 
   const { tab } = AppModuleSetup('stripe')
   const sampleEvent = ref<string>('payment_intent.succeeded')
+  const newConnectionName = ref('')
   const sampleGroups = [...new Set(stripeSampleEvents.map((item) => item.group))]
   const module = BrewStore().module('stripe')
   const versions = computed(() => module.installed)

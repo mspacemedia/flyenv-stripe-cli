@@ -20,6 +20,12 @@ import type {
 import { listenerArgs, stripeLoginUrl } from '../shared/Arguments'
 import { STRIPE_LOGIN_REQUEST_TIMEOUT_MS } from '../shared/Login'
 import {
+  stripeContext,
+  stripePreferences,
+  connectionLabel,
+  type StripePreferences
+} from '../shared/Connections'
+import {
   resourceCreateArgs,
   sampleEventArgs,
   type StripeCreation,
@@ -30,9 +36,14 @@ import {
 } from '../shared/Workbench'
 
 const settingsKey = 'flyenv-stripe-settings-v1'
+const preferencesKey = 'flyenv-stripe-connections-v1'
 
 export class StripeController {
   settings: StripeSettings = { forwardTo: '', events: '', skipVerify: false }
+  preferences = stripePreferences(undefined)
+  preferenceChange = new StripeOperation()
+  disconnection = new StripeOperation()
+  disconnectOutput = ''
   loaded = false
   settingsError = ''
   releases: StripeRelease[] = []
@@ -64,6 +75,8 @@ export class StripeController {
   downloadVersion = ''
   private loadFlight?: Promise<void>
   private polling?: StripeRuntimePolling
+  private runtimeGeneration = 0
+  private loggedOutProfile = ''
   private request: StripeRequest = async (method, args, timeout, progress) => {
     const response = await forkTerminalRequest(
       'app-fork:stripe',
@@ -76,20 +89,172 @@ export class StripeController {
     return response.data
   }
 
+  get context() {
+    return stripeContext({
+      profile: this.preferences.selected,
+      telemetry: this.preferences.telemetry
+    })
+  }
+
+  get connectionBusy(): boolean {
+    const module = BrewStore().module('stripe')
+    return (
+      !!module.starting ||
+      module.installed.some((item) => item.run || item.running) ||
+      [
+        this.authentication,
+        this.accountCheck,
+        this.disconnection,
+        this.preferenceChange,
+        this.dataCreation,
+        this.dataRefresh,
+        this.testEvent,
+        this.terminal,
+        this.approval
+      ].some((operation) => operation.running)
+    )
+  }
+
+  private clearAccountDisplay() {
+    this.runtimeGeneration++
+    this.accountSummary = ''
+    this.browserUrl = ''
+    this.verificationCode = ''
+    this.browserError = ''
+    this.reauthorizationPending = false
+    this.secret = ''
+    this.output = ''
+    this.listenerAuthError = ''
+    this.testEventOutput = ''
+    this.authentication.error = ''
+    this.accountCheck.error = ''
+    this.disconnection.error = ''
+    this.testEvent.error = ''
+    this.dataRefresh.error = ''
+    this.dataCreation.error = ''
+    this.inspection.error = ''
+    this.resources = { products: [], prices: [], customers: [], subscriptions: [] }
+    this.resourceErrors = []
+    this.resourceHasMore = []
+    this.createdResource = undefined
+    this.pendingCreation = undefined
+  }
+
+  private async ready(): Promise<boolean> {
+    try {
+      await this.load()
+      return true
+    } catch (error) {
+      MessageError(String(error))
+      return false
+    }
+  }
+
+  private async savePreferences(next: StripePreferences, changedAccount: boolean) {
+    if (this.connectionBusy) throw new Error(StripeT('connectionBusy'))
+    const snapshot = stripePreferences(next)
+    await this.preferenceChange.run(
+      async () => StorageSetAsync(preferencesKey, snapshot),
+      'savePreferences',
+      [snapshot]
+    )
+    this.preferences = snapshot
+    if (changedAccount) {
+      this.clearAccountDisplay()
+      this.loggedOutProfile = this.context.profile
+      this.disconnectOutput = ''
+    }
+  }
+
+  async addConnection(label: string): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
+    try {
+      const name = connectionLabel(label)
+      if (
+        this.preferences.connections.some((item) => item.label.toLowerCase() === name.toLowerCase())
+      )
+        throw new Error(StripeT('duplicateConnection'))
+      const profile = `flyenv-${globalThis.crypto.randomUUID()}`
+      await this.savePreferences(
+        {
+          ...this.preferences,
+          selected: profile,
+          connections: [...this.preferences.connections, { profile, label: name }]
+        },
+        true
+      )
+      MessageSuccess(StripeT('connectionAdded'))
+    } catch (error) {
+      MessageError(String(error))
+    }
+  }
+
+  async selectConnection(profile: string): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
+    if (profile === this.preferences.selected) return
+    try {
+      await this.savePreferences({ ...this.preferences, selected: profile }, true)
+    } catch (error) {
+      MessageError(String(error))
+    }
+  }
+
+  async setTelemetry(enabled: boolean): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
+    try {
+      await this.savePreferences({ ...this.preferences, telemetry: enabled }, false)
+    } catch (error) {
+      MessageError(String(error))
+    }
+  }
+
+  async disconnect(version: ModuleInstalledItem | undefined): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
+    if (this.disconnection.running) return
+    try {
+      if (this.connectionBusy) throw new Error(StripeT('connectionBusy'))
+      const selected = this.requireCLI(version)
+      this.disconnectOutput = ''
+      // Even a failed logout may have revoked upstream credentials. Discard cached account data.
+      this.clearAccountDisplay()
+      this.loggedOutProfile = this.context.profile
+      this.disconnectOutput = await this.disconnection.run(
+        this.request,
+        'logout',
+        [selected, this.context],
+        75_000
+      )
+      MessageSuccess(StripeT('disconnected'))
+    } catch (error) {
+      MessageError(String(error))
+    }
+  }
+
   load(): Promise<void> {
     if (this.loaded) return Promise.resolve()
     if (this.loadFlight) return this.loadFlight
-    this.loadFlight = StorageGetAsync<StripeSettings>(settingsKey)
-      .then((settings) => {
+    const read = async <T>(key: string): Promise<T | undefined> => {
+      try {
+        return await StorageGetAsync<T>(key)
+      } catch (error) {
+        if (error instanceof Error && error.message === 'no found') return undefined
+        throw error
+      }
+    }
+    this.loadFlight = Promise.all([
+      read<StripeSettings>(settingsKey),
+      read<StripePreferences>(preferencesKey)
+    ])
+      .then(([settings, preferences]) => {
+        const validated = stripePreferences(preferences)
         this.settings = { ...this.settings, ...settings }
+        this.preferences = validated
         this.loaded = true
+        this.settingsError = ''
       })
       .catch((error) => {
-        if (error instanceof Error && error.message === 'no found') this.loaded = true
-        else {
-          this.settingsError = String(error)
-          throw error
-        }
+        this.settingsError = String(error)
+        throw error
       })
       .finally(() => {
         this.loadFlight = undefined
@@ -98,6 +263,7 @@ export class StripeController {
   }
 
   async save(settings: StripeSettings): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.saving) return
     this.saving = true
     this.settingsError = ''
@@ -121,9 +287,14 @@ export class StripeController {
   }
 
   async startParams(): Promise<StripeSettings[]> {
-    if (this.authentication.running) throw new Error(StripeT('loginPending'))
     await this.load()
-    const snapshot = { ...this.settings }
+    if (
+      [this.authentication, this.disconnection, this.preferenceChange, this.accountCheck].some(
+        (operation) => operation.running
+      )
+    )
+      throw new Error(StripeT('connectionBusy'))
+    const snapshot = { ...this.settings, ...this.context }
     listenerArgs(snapshot)
     return [snapshot]
   }
@@ -174,7 +345,17 @@ export class StripeController {
   }
 
   async login(version: ModuleInstalledItem | undefined, freshSession = false): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.authentication.running) return
+    if (
+      this.disconnection.running ||
+      this.preferenceChange.running ||
+      this.terminal.running ||
+      this.approval.running
+    ) {
+      MessageError(StripeT('connectionBusy'))
+      return
+    }
     if (
       this.dataCreation.running ||
       this.dataRefresh.running ||
@@ -185,7 +366,11 @@ export class StripeController {
       return
     }
     const module = BrewStore().module('stripe')
-    if (!version?.enable || module.installed.some((item) => item.run || item.running)) {
+    if (
+      !version?.enable ||
+      module.starting ||
+      module.installed.some((item) => item.run || item.running)
+    ) {
       MessageError(StripeT('loginPrecondition'))
       return
     }
@@ -209,7 +394,7 @@ export class StripeController {
       const result = await this.authentication.run(
         request,
         'login',
-        [version, freshSession],
+        [version, freshSession, this.context],
         STRIPE_LOGIN_REQUEST_TIMEOUT_MS
       )
       if (result?.reauthorization === true) {
@@ -244,6 +429,7 @@ export class StripeController {
   }
 
   async checkConnection(version: ModuleInstalledItem | undefined): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.accountCheck.running || this.authentication.running) return
     if (this.dataCreation.running || this.dataRefresh.running || this.testEvent.running) {
       MessageError(StripeT('finishDataAction'))
@@ -254,7 +440,7 @@ export class StripeController {
       const account: StripeAccountStatus = await this.accountCheck.run(
         this.request,
         'accountStatus',
-        [selected],
+        [selected, this.context],
         45_000
       )
       this.accountSummary = StripeT('accountChecked', {
@@ -282,10 +468,13 @@ export class StripeController {
     if (!version?.enable) throw new Error(StripeT('selectCLI'))
     if (this.authentication.running) throw new Error(StripeT('loginPending'))
     if (this.accountCheck.running) throw new Error(StripeT('accountCheckPending'))
+    if (this.disconnection.running || this.preferenceChange.running)
+      throw new Error(StripeT('connectionBusy'))
     return version
   }
 
   async triggerEvent(version: ModuleInstalledItem | undefined, event: string): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.testEvent.running) return
     try {
       const selected = this.requireCLI(version)
@@ -294,7 +483,7 @@ export class StripeController {
       this.testEventOutput = await this.testEvent.run(
         this.request,
         'triggerEvent',
-        [selected, event],
+        [selected, event, this.context],
         150_000
       )
       MessageSuccess(StripeT('sampleSent'))
@@ -304,10 +493,11 @@ export class StripeController {
   }
 
   async openTerminal(version: ModuleInstalledItem | undefined): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.terminal.running) return
     try {
       const selected = this.requireCLI(version)
-      await this.terminal.run(this.request, 'openTerminal', [selected], 45_000)
+      await this.terminal.run(this.request, 'openTerminal', [selected, this.context], 45_000)
       MessageSuccess(StripeT('terminalOpened'))
     } catch (error) {
       MessageError(String(error))
@@ -315,13 +505,14 @@ export class StripeController {
   }
 
   async refreshTestData(version: ModuleInstalledItem | undefined): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.dataRefresh.running) return
     try {
       const selected = this.requireCLI(version)
       const result: StripeDataRefresh = await this.dataRefresh.run(
         this.request,
         'listTestData',
-        [selected],
+        [selected, this.context],
         60_000
       )
       Object.assign(this.resources, result.lists)
@@ -337,10 +528,16 @@ export class StripeController {
     resource: StripeResourceType,
     fields: Record<string, unknown>
   ): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.dataCreation.running || this.dataRefresh.running) return
     try {
       const selected = this.requireCLI(version)
-      const key = JSON.stringify({ bin: selected.bin, resource, fields })
+      const key = JSON.stringify({
+        bin: selected.bin,
+        profile: this.context.profile,
+        resource,
+        fields
+      })
       if (this.pendingCreation?.key !== key)
         this.pendingCreation = { key, requestId: globalThis.crypto.randomUUID() }
       const request: StripeCreation = {
@@ -352,7 +549,7 @@ export class StripeController {
       this.createdResource = await this.dataCreation.run(
         this.request,
         'createTestData',
-        [selected, request],
+        [selected, request, this.context],
         90_000
       )
       this.pendingCreation = undefined
@@ -365,10 +562,30 @@ export class StripeController {
   }
 
   async refreshRuntime(): Promise<void> {
+    if (!this.loaded && !(await this.ready())) return
     if (this.inspection.running) return
+    const context = this.context
+    const generation = this.runtimeGeneration
+    const running = BrewStore()
+      .module('stripe')
+      .installed.some((item) => item.run)
+    if (!running && this.loggedOutProfile === context.profile) return
+    if (running) this.loggedOutProfile = ''
+    if (this.disconnection.running || this.preferenceChange.running) return
     try {
-      const runtime: StripeRuntime = await this.inspection.run(this.request, 'runtime', [], 15_000)
-      this.secret = runtime.secret
+      const runtime: StripeRuntime = await this.inspection.run(
+        this.request,
+        'runtime',
+        [context],
+        15_000
+      )
+      if (
+        this.preferences.selected !== context.profile ||
+        this.disconnection.running ||
+        this.runtimeGeneration !== generation
+      )
+        return
+      this.secret = running ? runtime.secret : ''
       this.output = runtime.output
       this.listenerAuthError = runtime.authError ?? ''
     } catch {

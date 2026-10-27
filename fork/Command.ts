@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { cleanStripeOutput, redactStripeOutput } from '../shared/Arguments'
 
-export function stripeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function stripeEnvironment(env: NodeJS.ProcessEnv, telemetry = false): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...env, NO_COLOR: '1' }
   // Use the account selected by this module's CLI config, rather than inherited overrides.
   for (const key of Object.keys(env)) {
@@ -9,7 +9,7 @@ export function stripeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   }
   // Apply privacy controls after clearing inherited account and endpoint overrides.
   result.STRIPE_NO_AUTO_UPDATE = '1'
-  result.STRIPE_CLI_TELEMETRY_OPTOUT = '1'
+  result.STRIPE_CLI_TELEMETRY_OPTOUT = telemetry === true ? '0' : '1'
   return result
 }
 
@@ -19,11 +19,12 @@ export function runStripeCommand(
   env: NodeJS.ProcessEnv,
   timeout = 30_000,
   onOutput?: (text: string) => void,
-  maxOutput = 65_536
+  maxOutput = 65_536,
+  telemetry = false
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
-      env: stripeEnvironment(env),
+      env: stripeEnvironment(env, telemetry),
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']

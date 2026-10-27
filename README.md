@@ -5,7 +5,10 @@ A community FlyEnv plugin for Stripe CLI downloads, browser login, local test we
 ## Features
 
 - Install an official Stripe CLI release for your platform and connect through Stripe's browser approval flow, with a visible pairing code.
-- **Reconnect with a fresh session:** explicitly start `stripe login --new-session` when a stored session is rejected. This replaces the current CLI session, so other terminals using it may need to reconnect.
+- **Saved connections:** keep separate named Stripe CLI profiles and select which account configuration all plugin actions use. Requires CLI 1.55.1 or newer for separate OAuth credential profiles; the existing default connection is preserved.
+- **Disconnect / log out:** clear credentials for the selected connection, revoking its OAuth session where supported. Stop listening first. Saved labels and other connections are kept; already open terminals using this connection can also be signed out. CLI warnings are shown, including failed remote revocation.
+- **Sign in to another account / fresh session:** explicitly run `stripe login --new-session` for the selected profile. To use a different Stripe user, sign out of Stripe in the approval browser first. Add a new saved connection to keep the old session instead of replacing it.
+- **Stripe CLI telemetry:** off by default in the plugin, with an explicit opt-in switch. Applies to new commands, listeners and terminals; existing terminals retain their launch preferences.
 - Forward test webhooks to a FlyEnv site or a complete local webhook URL; inspect delivery results and copy the listener's signing secret.
 - **Send test event:** choose from 15 fixtures covering successful/failed payments, refunds, Checkout, customers, invoices, subscriptions and payment-method setup. Fixtures can also create related objects/events.
 - **Open Stripe CLI:** launch a terminal with the selected binary and the same account configuration as the plugin. Use any supported Stripe CLI command.
@@ -38,9 +41,19 @@ If Stripe CLI already has a session, Stripe can show account permissions without
 
 Creation requests carry idempotency keys. Retrying unchanged failed input within the current app session reuses its key; changing fields, reconnecting or restarting creates a new request. If a request times out, check Stripe before changing fields or restarting: the object may already exist. A failed list refresh cannot undo or repeat a successful creation. Resource-list errors are reported individually while successful lists remain available.
 
+## Connections and privacy settings
+
+Your previous CLI session remains under **Existing / default connection**. Enter a label and choose **Add connection** to create and select a separate CLI profile, then **Connect** to approve that profile in your browser. Selecting a saved connection does not automatically log in, inspect an account or start a listener. Use **Check connection** to inspect the selected CLI account. Stop the listener and finish pending account/data/terminal actions before changing the selection or telemetry.
+
+**Disconnect / log out** uses `stripe logout` for only the selected profile, without `--all`. Stripe CLI owns credential deletion and token revocation; a CLI warning can mean local logout completed but remote revocation failed. On failure the plugin clears cached account display and reports the error rather than assuming authentication is unchanged. No automatic login or retry follows.
+
+FlyEnv stores only labels, profile IDs, selection and the telemetry preference in its module storage. Stripe CLI handles credentials, normally through the OS credential store, with its own fallback when unavailable. The UI does not collect or store API keys. For manual key-based authentication use **Open Stripe CLI** and `stripe login --interactive`; follow the [official API-key guidance](https://docs.stripe.com/cli/api_keys). Terminal commands use the selected profile and configuration.
+
+Telemetry defaults off, preserving the plugin's previous opt-out. The switch explicitly sets `STRIPE_CLI_TELEMETRY_OPTOUT=1` when off and `0` when on. Stripe describes usage, error, timing, OS/version and detected AI-agent collection in its [telemetry policy](https://docs.stripe.com/cli/telemetry). It says credentials, personal data, paths/code, argument values and account data are excluded. The preference affects Stripe CLI processes started by this plugin; it does not change FlyEnv's own traffic or other CLI installations. Reopen old terminals after changing the setting. Version discovery/download verification remains opted out.
+
 ## CLI commands
 
-If listener startup reports a Stripe authentication 401/403, stop the listener, choose **Reconnect with a fresh session**, approve the intended account or sandbox, then start listening again. The plugin never replaces a session automatically. A stored account reported by **Check connection** does not prove listener access. If fresh login still fails, check your Stripe Dashboard role and account access. A local webhook destination returning HTTP 403 is a separate delivery failure.
+If listener startup reports a Stripe authentication 401/403, stop the listener, choose **Sign in to another account / fresh session**, approve the intended account or sandbox, then start listening again. The plugin never replaces a session automatically. A stored account reported by **Check connection** does not prove listener access. If fresh login still fails, check your Stripe Dashboard role and account access. A local webhook destination returning HTTP 403 is a separate delivery failure.
 
 Choose **Open Stripe CLI**. A `stripe` function points to the selected executable and plugin configuration for that terminal session. Examples:
 
@@ -71,7 +84,7 @@ npm test -- --flyenv-root ../FlyEnv
 npm run build -- --flyenv-root ../FlyEnv
 ```
 
-The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.2.2.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
+The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.3.0.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
 
 Tests use simulated IPC/browser boundaries and local fixtures; they never approve Stripe access, create real account objects or start a listener. They cover login parsing/pairing, process cleanup, duplicate requests, idempotent retries, test-mode argv isolation, exact amount conversion, terminal quoting, localization and plugin build/import. An optional real-binary runtime test in `tests/runtime.test.ts` can be run from a FlyEnv checkout to check binary discovery and retained configuration without authenticating.
 
@@ -79,7 +92,7 @@ Tests use simulated IPC/browser boundaries and local fixtures; they never approv
 
 The plugin preserves module ID `stripe`, settings key `flyenv-stripe-settings-v1`, binaries in `<AppDir>/stripe/<version>` and configuration/PID/log paths in `<BaseDir>/stripe/`. It contains no account tokens or CLI binaries. Disable/uninstall/update retain user data and use the host's service shutdown lifecycle.
 
-CLI commands clear inherited Stripe overrides and set `STRIPE_CLI_TELEMETRY_OPTOUT=1` and `STRIPE_NO_AUTO_UPDATE=1`. Login allows only HTTPS on `access.stripe.com` and `dashboard.stripe.com`; returned commands are parsed as arguments rather than executed in a shell. UI resource commands are shell-free and return selected fields rather than full resource secrets.
+CLI commands clear inherited Stripe overrides, apply the selected telemetry preference (opted out by default), and set `STRIPE_NO_AUTO_UPDATE=1`. Login allows only HTTPS on `access.stripe.com` and `dashboard.stripe.com`; returned commands are parsed as arguments rather than executed in a shell. UI resource commands are shell-free and return selected fields rather than full resource secrets.
 
 Plugins share FlyEnv's runtime and are not sandboxed. This plugin does not change FlyEnv's vendor/license requests. Signing secrets are redacted in the displayed log but remain in raw listener logs. Stripe CLI manages credential storage, including its plaintext fallback when an OS credential store is unavailable. CLI downloads are restricted to official Stripe GitHub releases and checked by executable version; archive-checksum verification for those CLI downloads is not yet implemented. Forwarding accepts a user-provided HTTP(S) URL; use a trusted local destination and certificate verification where possible.
 
