@@ -4,6 +4,8 @@ A community FlyEnv plugin for Stripe CLI downloads, browser login, local test we
 
 ## Features
 
+The **Service** page has **Connect**, **Telemetry** and **Webhooks** tabs. Account/profile and CLI controls live under Connect; the telemetry preference has its own tab; forwarding, sample events and delivery logs live under Webhooks. Switching tabs preserves pending approval and unsaved forwarding input. Only the login action you clicked shows a loading indicator.
+
 - Install an official Stripe CLI release for your platform and connect through Stripe's browser approval flow, with a visible pairing code.
 - **Saved connections:** keep separate named Stripe CLI profiles and select which account configuration all plugin actions use. Requires CLI 1.55.1 or newer for separate OAuth credential profiles; the existing default connection is preserved.
 - **Disconnect / log out:** clear credentials for the selected connection, revoking its OAuth session where supported. Stop listening first. Saved labels and other connections are kept; already open terminals using this connection can also be signed out. CLI warnings are shown, including failed remote revocation.
@@ -87,7 +89,7 @@ npm test -- --flyenv-root ../FlyEnv
 npm run build -- --flyenv-root ../FlyEnv
 ```
 
-The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.3.1.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
+The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.3.2.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
 
 Tests use simulated IPC/browser boundaries and local fixtures; they never approve Stripe access, create real account objects or start a listener. They cover login parsing/pairing, process cleanup, duplicate requests, idempotent retries, test-mode argv isolation, exact amount conversion, terminal quoting, localization and plugin build/import. An optional real-binary runtime test in `tests/runtime.test.ts` can be run from a FlyEnv checkout to check binary discovery and retained configuration without authenticating.
 

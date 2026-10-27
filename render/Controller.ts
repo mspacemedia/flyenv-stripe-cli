@@ -50,6 +50,7 @@ export class StripeController {
   discovery = new StripeOperation()
   download = new StripeOperation()
   authentication = new StripeOperation()
+  loginAction: '' | 'connect' | 'fresh' | 'different-user' = ''
   accountCheck = new StripeOperation()
   approval = new StripeOperation()
   reauthorizationPending = false
@@ -380,6 +381,7 @@ export class StripeController {
       MessageError(StripeT('loginPrecondition'))
       return
     }
+    this.loginAction = manualBrowser ? 'different-user' : freshSession ? 'fresh' : 'connect'
     this.browserUrl = ''
     this.manualApproval = manualBrowser === true
     this.verificationCode = ''
@@ -420,6 +422,7 @@ export class StripeController {
       this.reauthorizationPending = false
       MessageError(String(error))
     } finally {
+      this.loginAction = ''
       if (!this.reauthorizationPending) {
         this.browserUrl = ''
         this.manualApproval = false

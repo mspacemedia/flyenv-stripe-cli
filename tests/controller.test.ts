@@ -106,6 +106,7 @@ try {
 
   const first = controller.login(version)
   await tick()
+  assert.equal(controller.loginAction, 'connect')
   const login = parseStripeLogin(
     JSON.stringify({
       browser_url: 'https://access.stripe.com/stripecli/oauth2/device?user_code=ABCD-EFGH',
@@ -116,6 +117,12 @@ try {
   progress(login)
   assert.equal(controller.verificationCode, 'ABCD-EFGH')
   await controller.login(version)
+  await controller.login(version, true, true)
+  assert.equal(
+    controller.loginAction,
+    'connect',
+    'duplicate actions cannot change the initiating spinner'
+  )
   assert.equal(calls, 1, 'duplicate connection clicks preserve the pending attempt')
   controller.attach()
   await tick()
@@ -131,6 +138,7 @@ try {
   fail(new Error('Stripe CLI operation timed out. Try again.'))
   await first
   assert.equal(controller.authentication.running, false)
+  assert.equal(controller.loginAction, '', 'failed login clears its initiating action')
   assert.match(controller.authentication.error, /timed out/)
   assert.equal(
     controller.browserUrl,
@@ -144,6 +152,7 @@ try {
   )
 
   const retry = controller.login(version, true)
+  assert.equal(controller.loginAction, 'fresh')
   assert.equal(controller.verificationCode, '', 'a new attempt discards the old comparison code')
   await tick()
   assert.deepEqual(
@@ -466,6 +475,7 @@ try {
   manualProgress({ code: 200, msg: login })
   await tick()
   assert.equal(manual.manualApproval, true)
+  assert.equal(manual.loginAction, 'different-user')
   assert.equal(manual.verificationCode, 'ABCD-EFGH')
   assert.equal(
     mock.opens,
@@ -477,6 +487,11 @@ try {
   manual.attach()
   await tick()
   manual.detach()
+  assert.equal(
+    manual.loginAction,
+    'different-user',
+    'page re-entry keeps the initiating login action'
+  )
   assert.equal(manual.manualApproval, true, 'page re-entry retains the chosen browser handoff')
   let copied = ''
   mock.write = async (text: string) => {
@@ -499,6 +514,7 @@ try {
   finishManual({ code: 1, msg: 'Device request ended' })
   await manualLogin
   assert.equal(manual.manualApproval, false)
+  assert.equal(manual.loginAction, '')
   assert.equal(manual.browserUrl, '')
   copied = ''
   mock.write = async (text: string) => {
