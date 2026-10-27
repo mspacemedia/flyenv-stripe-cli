@@ -387,7 +387,7 @@ class Stripe extends Base {
       return { account: account!, output }
     } catch (error) {
       throw new Error(
-        `${output ? output + '\n' : ''}Stripe CLI sign-in finished, but the selected profile could not be verified. ${String(error)} No automatic retry was started. Use saved connection to check again, or authorize this profile explicitly.`
+        `${output ? output + '\n' : ''}Stripe CLI sign-in finished, but the selected profile could not be verified. ${String(error)} No automatic retry was started. Click Connect to check again, or open Account options to sign in.`
       )
     }
   }

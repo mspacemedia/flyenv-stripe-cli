@@ -63,7 +63,6 @@
                         >{{ StripeT('addConnection') }}</el-button
                       >
                     </div>
-                    <p class="mb-4 text-xs opacity-75">{{ StripeT('connectionsHelp') }}</p>
                     <el-form-item :label="StripeT('cliVersion')">
                       <el-select
                         v-model="selectedBin"
@@ -89,8 +88,7 @@
                         />
                       </el-select>
                     </el-form-item>
-                    <p class="mb-3 text-sm opacity-75">{{ StripeT('loginHelp') }}</p>
-                    <div class="stripe-connect-actions">
+                    <div class="stripe-connect-actions" data-testid="stripe-account-actions">
                       <el-button
                         type="primary"
                         :loading="stripe.accountCheck.running"
@@ -103,40 +101,6 @@
                         "
                         @click="stripe.checkConnection(version)"
                         >{{ StripeT('useSavedConnection') }}</el-button
-                      >
-                      <el-button
-                        :loading="stripe.authentication.running && stripe.loginAction === 'connect'"
-                        :disabled="!stripe.loaded || !version || stripe.connectionBusy"
-                        @click="stripe.login(version)"
-                        >{{ StripeT('connect') }}</el-button
-                      >
-                      <el-button
-                        :loading="stripe.terminal.running"
-                        :disabled="
-                          !stripe.loaded ||
-                          !version ||
-                          stripe.authentication.running ||
-                          stripe.disconnection.running ||
-                          stripe.preferenceChange.running
-                        "
-                        @click="stripe.openTerminal(version)"
-                      >
-                        {{ StripeT('openCLI') }}
-                      </el-button>
-                      <el-button
-                        :loading="stripe.authentication.running && stripe.loginAction === 'fresh'"
-                        :disabled="!stripe.loaded || !version || stripe.connectionBusy"
-                        @click="stripe.login(version, true)"
-                      >
-                        {{ StripeT('freshSession') }}
-                      </el-button>
-                      <el-button
-                        :loading="
-                          stripe.authentication.running && stripe.loginAction === 'different-user'
-                        "
-                        :disabled="!stripe.loaded || !version || stripe.connectionBusy"
-                        @click="stripe.login(version, true, true)"
-                        >{{ StripeT('differentUser') }}</el-button
                       >
                       <el-popconfirm
                         :title="StripeT('disconnectConfirm')"
@@ -155,9 +119,72 @@
                           >
                         </template>
                       </el-popconfirm>
+                      <el-button
+                        :loading="stripe.terminal.running"
+                        :disabled="
+                          !stripe.loaded ||
+                          !version ||
+                          stripe.authentication.running ||
+                          stripe.disconnection.running ||
+                          stripe.preferenceChange.running ||
+                          stripe.accountCheck.running
+                        "
+                        @click="stripe.openTerminal(version)"
+                        >{{ StripeT('openCLI') }}</el-button
+                      >
+                      <el-dropdown
+                        trigger="click"
+                        :disabled="!stripe.loaded || !version || stripe.connectionBusy"
+                      >
+                        <el-button
+                          :loading="stripe.authentication.running"
+                          :disabled="!stripe.loaded || !version || stripe.connectionBusy"
+                          data-testid="stripe-account-options"
+                          >{{ StripeT('accountOptions') }}
+                          <span class="stripe-dropdown-arrow" aria-hidden="true">▾</span></el-button
+                        >
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item
+                              :disabled="stripe.connectionBusy"
+                              @click="stripe.login(version)"
+                            >
+                              <div class="stripe-option"
+                                ><span>{{ StripeT('connect') }}</span
+                                ><small>{{ StripeT('authorizeOptionHelp') }}</small></div
+                              >
+                            </el-dropdown-item>
+                            <el-dropdown-item
+                              :disabled="stripe.connectionBusy"
+                              @click="stripe.login(version, true, true)"
+                            >
+                              <div class="stripe-option"
+                                ><span>{{ StripeT('differentUser') }}</span
+                                ><small>{{ StripeT('switchUserOptionHelp') }}</small></div
+                              >
+                            </el-dropdown-item>
+                            <el-dropdown-item
+                              :disabled="stripe.connectionBusy"
+                              divided
+                              @click="stripe.login(version, true)"
+                            >
+                              <div class="stripe-option"
+                                ><span>{{ StripeT('freshSession') }}</span
+                                ><small>{{ StripeT('resetOptionHelp') }}</small></div
+                              >
+                            </el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                     </div>
-                    <p class="mt-3 text-xs opacity-75">{{ StripeT('savedConnectionHelp') }}</p>
-                    <p class="mt-3 text-xs opacity-75">{{ StripeT('freshSessionHelp') }}</p>
+                    <p v-if="stripe.accountCheck.error" class="mt-3 text-xs opacity-75">{{
+                      StripeT('savedConnectionHelp')
+                    }}</p>
+                    <p
+                      v-if="stripe.authentication.running && stripe.loginAction === 'fresh'"
+                      class="mt-3 text-xs opacity-75"
+                      >{{ StripeT('freshSessionHelp') }}</p
+                    >
                     <el-alert
                       v-if="stripe.authentication.running && stripe.verifyingLogin"
                       class="mt-4"
@@ -523,6 +550,19 @@
   }
   .stripe-connect-actions :deep(.el-button + .el-button) {
     margin-left: 0;
+  }
+  .stripe-dropdown-arrow {
+    margin-left: 6px;
+  }
+  .stripe-option {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.4;
+    padding: 4px 0;
+    small {
+      color: var(--el-text-color-secondary);
+      font-size: 12px;
+    }
   }
   .stripe-log {
     max-height: 340px;

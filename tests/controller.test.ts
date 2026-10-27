@@ -182,6 +182,7 @@ try {
     'completed approval must not retain its actionable browser link'
   )
   assert.equal(controller.verificationCode, '')
+  controller.accountCheck.error = 'Previously missing credentials'
   complete({
     code: 0,
     data: {
@@ -195,6 +196,11 @@ try {
   assert.equal(controller.authentication.running, false)
   assert.equal(controller.authentication.error, '')
   assert.equal(controller.verifyingLogin, false)
+  assert.equal(
+    controller.accountCheck.error,
+    '',
+    'verified login clears superseded saved-login guidance'
+  )
   assert.equal(calls, 2)
   assert.equal(errors.length, 1)
   assert.equal(successes.length, 1)

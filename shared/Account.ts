@@ -7,7 +7,7 @@ export type StripeAccountStatus = {
 }
 
 export const stripeProfileNeedsLogin =
-  'This saved connection has no stored Stripe CLI login. Select the connection and choose Authorize / update access, finish approval, then wait for FlyEnv to verify the saved login. Adding a connection name alone does not save credentials.'
+  'This saved connection has no stored Stripe CLI login. Open Account options → Sign in / update permissions, finish approval, then wait for FlyEnv to verify this profile. Adding a connection name alone does not save credentials.'
 
 export function stripeAccountFailure(error: unknown): unknown {
   try {

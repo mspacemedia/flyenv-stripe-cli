@@ -63,13 +63,13 @@ assert.ok(STRIPE_LOGIN_REQUEST_TIMEOUT_MS > STRIPE_LOGIN_WAIT_TIMEOUT_MS + 60_00
 
 let locale = 'en'
 const translate = createStripeT(() => locale)
-assert.equal(translate('connect'), 'Authorize / update access')
+assert.equal(translate('connect'), 'Sign in / update permissions')
 locale = 'zh-hant'
 assert.equal(translate('account'), 'Stripe account')
 locale = 'zh-TW'
 assert.equal(translate('connect'), '连接或更新 Stripe 账户')
 locale = 'unknown'
-assert.equal(translate('connect'), 'Authorize / update access')
+assert.equal(translate('connect'), 'Sign in / update permissions')
 
 const settings = {
   forwardTo: 'http://myshop.test:8080/stripe/webhook',
@@ -300,7 +300,7 @@ for (const output of [
 assert.deepEqual(stripeRuntimeFromLogs('\n'), { secret: '', output: '\n' })
 const rejectedRuntime = stripeRuntimeFromLogs(`Ready whsec_fixture\n${authFailure}`)
 assert.equal(rejectedRuntime.secret, '')
-assert.match(rejectedRuntime.authError!, /Start a fresh CLI session/)
+assert.match(rejectedRuntime.authError!, /Reset session/)
 let authStops = 0
 await assert.rejects(
   startStripeListener(
@@ -310,7 +310,7 @@ await assert.rejects(
       authStops++
     }
   ),
-  /Start a fresh CLI session/
+  /Reset session/
 )
 assert.equal(authStops, 1)
 await assert.rejects(
@@ -325,7 +325,7 @@ await assert.rejects(
       authStops++
     }
   ),
-  /Start a fresh CLI session/
+  /Reset session/
 )
 assert.equal(authStops, 1, 'a failed start without a PID cannot stop an unknown child')
 await assert.rejects(
@@ -336,7 +336,7 @@ await assert.rejects(
       throw new Error('termination denied')
     }
   ),
-  /Start a fresh CLI session[\s\S]*cleanup failed: Error: termination denied/
+  /Reset session[\s\S]*cleanup failed: Error: termination denied/
 )
 let stopped = 0
 let clock = 0

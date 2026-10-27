@@ -424,6 +424,7 @@ export class StripeController {
         !['test', 'live'].includes(result.account.mode)
       )
         throw new Error(StripeT('loginNotVerified'))
+      this.accountCheck.error = ''
       this.accountSummary =
         StripeT('accountChecked', {
           name: result.account.displayName || result.account.accountId,

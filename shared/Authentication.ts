@@ -1,7 +1,7 @@
 import { redactStripeOutput } from './Arguments'
 
 export const stripeAuthenticationRecovery =
-  "Stripe rejected the CLI session or account permissions (401/403). Stop the listener and choose Start a fresh CLI session, approve the intended account or sandbox, then start listening again. This replaces the selected connection's CLI session. If Stripe still refuses access, check your Dashboard role and access to that account."
+  "Stripe rejected the CLI session or account permissions (401/403). Stop the listener and open Account options → Reset session, approve the intended account or sandbox, then start listening again. This replaces the selected connection's CLI session. If Stripe still refuses access, check your Dashboard role and access to that account."
 
 export function hasStripeAuthenticationFailure(output: string): boolean {
   return (
