@@ -159,6 +159,14 @@
                     <p class="mt-3 text-xs opacity-75">{{ StripeT('savedConnectionHelp') }}</p>
                     <p class="mt-3 text-xs opacity-75">{{ StripeT('freshSessionHelp') }}</p>
                     <el-alert
+                      v-if="stripe.authentication.running && stripe.verifyingLogin"
+                      class="mt-4"
+                      :title="StripeT('verifyingStoredLogin')"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                    />
+                    <el-alert
                       v-if="stripe.manualApproval && stripe.browserUrl"
                       class="mt-4"
                       :title="StripeT('privateApprovalHelp')"

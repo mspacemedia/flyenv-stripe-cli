@@ -173,12 +173,28 @@ try {
   assert.equal(controller.verificationCode, 'NEWX-CODE')
   assert.equal(controller.browserError, 'Error: Browser unavailable')
   assert.equal(controller.authentication.running, true, 'browser failure cannot cancel CLI polling')
-  complete({ code: 0, data: 'Stripe account connected.' })
+  progress({ verifying: true })
+  assert.equal(controller.verifyingLogin, true)
+  assert.equal(controller.authentication.running, true, 'credential verification is non-terminal')
+  assert.equal(
+    controller.browserUrl,
+    '',
+    'completed approval must not retain its actionable browser link'
+  )
+  assert.equal(controller.verificationCode, '')
+  complete({
+    code: 0,
+    data: {
+      account: { accountId: 'acct_fixture', displayName: 'Fixture', mode: 'test' },
+      output: 'Stripe account connected.'
+    }
+  })
   await retry
   assert.equal(controller.verificationCode, '', 'successful login clears its comparison code')
   assert.equal(controller.browserUrl, '')
   assert.equal(controller.authentication.running, false)
   assert.equal(controller.authentication.error, '')
+  assert.equal(controller.verifyingLogin, false)
   assert.equal(calls, 2)
   assert.equal(errors.length, 1)
   assert.equal(successes.length, 1)
@@ -599,6 +615,19 @@ try {
   assert.equal(saved.authentication.running, false)
   assert.equal(savedCalls.length, 4, 'failed check cannot fall back to browser login')
   assert.equal(mock.opens, opensBeforeSaved)
+  const unverified = new StripeController()
+  unverified.loaded = true
+  mock.request = async () => ({ code: 0, data: 'Stripe account connected.' })
+  const successesBeforeUnverified = successes.length
+  await unverified.login(version, true)
+  assert.equal(
+    unverified.accountSummary,
+    '',
+    'unverified legacy success text must never claim connected'
+  )
+  assert.equal(successes.length, successesBeforeUnverified)
+  assert.equal(unverified.authentication.running, false)
+  assert.ok(errors.at(-1)?.includes('has not been verified'))
   console.log(
     'Stripe pairing, saved connections, logout, telemetry and workbench controller regression tests passed'
   )

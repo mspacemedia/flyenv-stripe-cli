@@ -6,10 +6,33 @@ export type StripeAccountStatus = {
   mode: 'test' | 'live'
 }
 
-export function parseStripeAccount(output: string): StripeAccountStatus {
+export const stripeProfileNeedsLogin =
+  'This saved connection has no stored Stripe CLI login. Select the connection and choose Authorize / update access, finish approval, then wait for FlyEnv to verify the saved login. Adding a connection name alone does not save credentials.'
+
+export function stripeAccountFailure(error: unknown): unknown {
+  try {
+    const data = parseStripeJSON(error instanceof Error ? error.message : String(error))
+    if (data.authenticated === false)
+      return Object.assign(new Error(stripeProfileNeedsLogin), {
+        code: 'STRIPE_PROFILE_LOGIN_REQUIRED'
+      })
+  } catch {
+    /* Non-JSON failures retain their original cause. */
+  }
+  return error
+}
+
+export function parseStripeAccount(output: string, expectedProfile?: string): StripeAccountStatus {
   const data = parseStripeJSON(output)
-  if (data.authenticated === false)
-    throw new Error('Stripe CLI is not authenticated. Connect your account first.')
+  if (
+    expectedProfile &&
+    typeof data.profile_name === 'string' &&
+    data.profile_name !== expectedProfile
+  )
+    throw new Error(
+      'Stripe CLI reported a different profile than the selected connection. This connection was not verified.'
+    )
+  if (data.authenticated === false) throw new Error(stripeProfileNeedsLogin)
   if (typeof data.account_id !== 'string' || !/^acct_[A-Za-z0-9]+$/.test(data.account_id))
     throw new Error(
       'No active Stripe account. Use Open Stripe CLI and stripe switch to select an account or sandbox.'

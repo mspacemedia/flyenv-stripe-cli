@@ -15,6 +15,7 @@ import { stripeSiteTargets } from '../render/Sites'
 import { stripeContext, stripePreferences, stripeProfileArgs } from '../shared/Connections'
 import type { StripeRuntime } from '../shared/types'
 import { createStripeT } from '../lang'
+import { parseStripeAccount, stripeAccountFailure } from '../shared/Account'
 import {
   parseStripeLogin,
   STRIPE_LOGIN_WAIT_TIMEOUT_MS,
@@ -412,6 +413,34 @@ assert.equal(env.STRIPE_PROJECT_NAME, '')
 assert.equal(env.STRIPE_CLI_TELEMETRY_OPTOUT, '1')
 assert.equal(env.STRIPE_NO_AUTO_UPDATE, '1')
 assert.equal(env.STRIPE_TELEMETRY_URL, '')
+const missingLogin = stripeAccountFailure(
+  new Error(
+    JSON.stringify({
+      authenticated: false,
+      profile_name: 'flyenv_fixture',
+      device_name: 'fixture',
+      test_mode_key: { available: false, expires_at: null },
+      live_mode_key: { available: false, expires_at: null }
+    })
+  )
+)
+assert.match(String(missingLogin), /no stored Stripe CLI login/)
+assert.ok(!String(missingLogin).includes('"authenticated"'))
+const networkFailure = new Error('Network timeout')
+assert.equal(stripeAccountFailure(networkFailure), networkFailure)
+assert.throws(
+  () =>
+    parseStripeAccount(
+      JSON.stringify({
+        authenticated: true,
+        profile_name: 'different',
+        account_id: 'acct_fixture',
+        test_mode_key: { available: true }
+      }),
+      'selected'
+    ),
+  /different profile/
+)
 assert.deepEqual(stripeContext(), { profile: 'default', telemetry: false })
 assert.deepEqual(stripeProfileArgs({ profile: 'client_1' }), ['--project-name', 'client_1'])
 assert.deepEqual(stripeProfileArgs(), [])

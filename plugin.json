@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "stripe",
   "name": "FlyEnv Stripe CLI",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": {
     "en": "Stripe CLI for FlyEnv: browser login, local test webhook forwarding, sample events, a CLI terminal, and test products, prices, customers and subscriptions.",
     "zh": "安装 Stripe CLI，通过浏览器连接账户，并将测试 Webhook 转发到本地 FlyEnv 站点。"

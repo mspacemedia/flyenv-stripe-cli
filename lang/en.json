@@ -43,6 +43,8 @@
   "pairingCodeHelp": "Compare this code with Stripe's browser page. Confirm there only if they match. Waiting for approval for up to 10 minutes.",
   "pairingEnded": "This connection attempt has ended. Connect again for a new code; do not approve the old browser page.",
   "connected": "Stripe account connected",
+  "loginNotVerified": "Stripe CLI finished, but the selected profile has not been verified. Use saved connection to check it. Authorize this profile if its credentials are missing.",
+  "verifyingStoredLogin": "Stripe CLI finished sign-in. Checking that the selected profile's login was saved before confirming the connection…",
   "forwarding": "Test webhook forwarding",
   "webhookUrl": "Local webhook URL",
   "urlHelp": "Select a site suggestion or enter its complete webhook URL. Replace /stripe/webhook with your application's actual route, and keep its local web server running.",

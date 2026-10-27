@@ -51,6 +51,7 @@ export class StripeController {
   download = new StripeOperation()
   authentication = new StripeOperation()
   loginAction: '' | 'connect' | 'fresh' | 'different-user' = ''
+  verifyingLogin = false
   accountCheck = new StripeOperation()
   approval = new StripeOperation()
   reauthorizationPending = false
@@ -382,6 +383,7 @@ export class StripeController {
       return
     }
     this.loginAction = manualBrowser ? 'different-user' : freshSession ? 'fresh' : 'connect'
+    this.verifyingLogin = false
     this.browserUrl = ''
     this.manualApproval = manualBrowser === true
     this.verificationCode = ''
@@ -391,6 +393,12 @@ export class StripeController {
     const request: StripeRequest = (method, args, timeout, progress) =>
       this.request(method, args, timeout, (value: StripeLoginProgress) => {
         progress(value)
+        if (value.verifying) {
+          this.verifyingLogin = true
+          this.browserUrl = ''
+          this.verificationCode = ''
+          this.manualApproval = false
+        }
         if (value.browserUrl) {
           this.browserUrl = stripeLoginUrl(value.browserUrl)
           this.verificationCode = value.verificationCode ?? ''
@@ -410,7 +418,18 @@ export class StripeController {
         this.reauthorizationPending = true
         return
       }
-      this.accountSummary = result
+      if (
+        !result?.account ||
+        !/^acct_[A-Za-z0-9]+$/.test(result.account.accountId) ||
+        !['test', 'live'].includes(result.account.mode)
+      )
+        throw new Error(StripeT('loginNotVerified'))
+      this.accountSummary =
+        StripeT('accountChecked', {
+          name: result.account.displayName || result.account.accountId,
+          id: result.account.accountId,
+          mode: result.account.mode
+        }) + (result.output ? `\n${result.output}` : '')
       this.verificationCode = ''
       this.resources = { products: [], prices: [], customers: [], subscriptions: [] }
       this.resourceErrors = []
@@ -423,6 +442,7 @@ export class StripeController {
       MessageError(String(error))
     } finally {
       this.loginAction = ''
+      this.verifyingLogin = false
       if (!this.reauthorizationPending) {
         this.browserUrl = ''
         this.manualApproval = false

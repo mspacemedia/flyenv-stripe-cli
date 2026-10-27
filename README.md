@@ -46,6 +46,8 @@ Creation requests carry idempotency keys. Retrying unchanged failed input within
 
 ## Connections and privacy settings
 
+After browser approval, FlyEnv reads the **same CLI profile** back with `whoami` before showing connected. A zero exit code or completion message alone is not accepted as proof. If sign-in finishes but that lookup fails, the account remains unverified; the plugin reports the failure and does not automatically repeat login, revoke credentials, or use another profile. A canceled CLI flow is not treated as success. Existing saved names without credentials need authorization for that profile; the plugin cannot reconstruct two separate users from the default session.
+
 Your previous CLI session remains under **Existing / default connection**. Enter a label and choose **Add connection** to create and select a separate CLI profile. For its first sign-in, choose **Authorize / update access** (or the different-user flow below). After authenticating, select that profile and choose **Use saved connection** to inspect/reuse its existing CLI identity. Two profiles authenticated under different Stripe users retain their separate CLI sessions even if your browser is signed in as only one user. Browser sign-in is not repeated by Use saved connection, and a failed check does not automatically log in or fall back to another profile. The check reports the current CLI account; listener permission is still tested when listening starts. Selecting a saved connection does not start a listener. Stop the listener and finish pending account/data/terminal actions before changing the selection or telemetry.
 
 **Disconnect / log out** uses `stripe logout` for only the selected profile, without `--all`. Stripe CLI owns credential deletion and token revocation; a CLI warning can mean local logout completed but remote revocation failed. On failure the plugin clears cached account display and reports the error rather than assuming authentication is unchanged. No automatic login or retry follows.
@@ -89,7 +91,7 @@ npm test -- --flyenv-root ../FlyEnv
 npm run build -- --flyenv-root ../FlyEnv
 ```
 
-The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.3.3.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
+The scripts stage only plugin sources in a unique temporary directory under the host's `plugins/`, reuse its build tooling, then clean up that directory. They do not overwrite an existing plugin or change the host registry. Outputs: `dist/stripe-0.3.4.flyenv-plugin`, `dist/registry.json` and the unpacked `dist/stripe/`. A local rebuild changes the checksum; distribute its matching registry and archive together. Building does not upload anything.
 
 Tests use simulated IPC/browser boundaries and local fixtures; they never approve Stripe access, create real account objects or start a listener. They cover login parsing/pairing, process cleanup, duplicate requests, idempotent retries, test-mode argv isolation, exact amount conversion, terminal quoting, localization and plugin build/import. An optional real-binary runtime test in `tests/runtime.test.ts` can be run from a FlyEnv checkout to check binary discovery and retained configuration without authenticating.
 

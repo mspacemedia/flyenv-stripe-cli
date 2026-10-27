@@ -6,7 +6,12 @@ import axios from 'axios'
 import { Base } from '@fork/module/Base'
 import { ForkPromise } from '@shared/ForkPromise'
 import type { SoftInstalled } from '@shared/app'
-import type { StripeRelease, StripeSettings, StripeRuntime } from '../shared/types'
+import type {
+  StripeRelease,
+  StripeSettings,
+  StripeRuntime,
+  StripeLoginResult
+} from '../shared/types'
 import EnvSync from '@shared/EnvSync'
 import { versionLocalFetch, versionFilterSame, versionSort } from '@fork/util/Version'
 import { serviceStartSpawn } from '@fork/util/ServiceStart'
@@ -32,7 +37,11 @@ import {
   type StripeDataRefresh
 } from '../shared/Workbench'
 import { openStripeTerminal } from './Terminal'
-import { parseStripeAccount, type StripeAccountStatus } from '../shared/Account'
+import {
+  parseStripeAccount,
+  stripeAccountFailure,
+  type StripeAccountStatus
+} from '../shared/Account'
 import { stripeRuntimeFromLogs } from '../shared/Authentication'
 import {
   stripeContext,
@@ -353,13 +362,38 @@ class Stripe extends Base {
   accountStatus(version: SoftInstalled, context: StripeContext = {}) {
     return new ForkPromise<StripeAccountStatus>(async (resolve) => {
       if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
-      const output = await this.cli(version, ['whoami', '--format', 'json'], context, 30_000)
-      resolve(parseStripeAccount(output))
+      try {
+        const options = stripeContext(context)
+        const output = await this.cli(version, ['whoami', '--format', 'json'], options, 30_000)
+        resolve(parseStripeAccount(output, options.profile))
+      } catch (error) {
+        throw stripeAccountFailure(error)
+      }
     })
   }
 
+  private async verifyLogin(
+    version: SoftInstalled,
+    context: StripeContext,
+    completed: string
+  ): Promise<StripeLoginResult> {
+    const output = redactStripeOutput(completed).trim()
+    if (/(?:^|\n)\s*cancel(?:l)?ed(?:[.!]|\s|$)/i.test(output))
+      throw new Error(
+        'Stripe CLI reported that sign-in was canceled. No new connection was confirmed. Use saved connection to inspect the current profile.'
+      )
+    try {
+      const account = await this.accountStatus(version, context)
+      return { account: account!, output }
+    } catch (error) {
+      throw new Error(
+        `${output ? output + '\n' : ''}Stripe CLI sign-in finished, but the selected profile could not be verified. ${String(error)} No automatic retry was started. Use saved connection to check again, or authorize this profile explicitly.`
+      )
+    }
+  }
+
   login(version: SoftInstalled, freshSession = false, context: StripeContext = {}) {
-    return new ForkPromise<string | { reauthorization: true }>((resolve, _reject, on) =>
+    return new ForkPromise<StripeLoginResult>((resolve, _reject, on) =>
       this.withCredentials(async () => {
         if (typeof freshSession !== 'boolean') throw new Error('Invalid Stripe login mode.')
         if (!existsSync(version.bin))
@@ -387,7 +421,8 @@ class Stripe extends Base {
             return
           }
           const completed = await this.cli(version, args, options, STRIPE_LOGIN_WAIT_TIMEOUT_MS)
-          resolve(redactStripeOutput(completed).trim() || 'Stripe account connected.')
+          on({ verifying: true })
+          resolve(await this.verifyLogin(version, options, completed))
         } else {
           // Older CLI releases wait for browser approval in a single browserless command.
           let lastUrl = ''
@@ -407,10 +442,9 @@ class Stripe extends Base {
               }
             }
           )
+          on({ verifying: true })
           resolve(
-            redactStripeOutput(output)
-              .replace(/https:\/\/[^\s]+/g, '')
-              .trim()
+            await this.verifyLogin(version, options, output.replace(/https:\/\/[^\s]+/g, '').trim())
           )
         }
       })

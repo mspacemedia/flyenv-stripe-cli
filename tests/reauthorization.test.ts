@@ -191,6 +191,7 @@ try {
   fixture.run = async (_bin: string, args: string[]) => {
     calls.push(args)
     if (args.includes('--help')) return '--non-interactive --new-session'
+    if (args.includes('whoami')) return JSON.stringify(oauth)
     if (args.includes('--non-interactive')) {
       assert.ok(args.includes('--new-session'))
       return JSON.stringify({
@@ -207,8 +208,11 @@ try {
     )
     return 'Connected'
   }
-  assert.equal(await stripe.login(version, true), 'Connected')
-  assert.equal(calls.length - beforeFresh, 3)
+  assert.deepEqual(await stripe.login(version, true), {
+    account: { accountId: 'acct_fixture', displayName: 'Fixture account', mode: 'test' },
+    output: 'Connected'
+  })
+  assert.equal(calls.length - beforeFresh, 4)
   assert.deepEqual(
     calls.at(-1)!.slice(0, 2),
     calls[0].slice(0, 2),
@@ -218,6 +222,8 @@ try {
   const context = { profile: 'flyenv-client', telemetry: true }
   await assert.rejects(stripe.logout({ ...version, version: '1.54.0' }, context), /1.55.1 or newer/)
   let activeProfile = context.profile
+  let verificationFailure = false
+  let canceledCompletion = false
   const scopedCalls: string[][] = []
   let pauseLogout = false
   let rejectLogout!: (error: Error) => void
@@ -240,8 +246,20 @@ try {
         verification_code: 'ABCD-EFGH',
         next_step: 'stripe login --complete-device'
       })
-    if (args.includes('--complete-device')) return 'Connected'
+    if (args.includes('--complete-device'))
+      return canceledCompletion
+        ? "Canceled. Run 'stripe login --non-interactive' again to try again."
+        : 'Connected'
     if (args.includes('whoami')) {
+      if (verificationFailure)
+        throw new Error(
+          JSON.stringify({
+            authenticated: false,
+            profile_name: activeProfile,
+            test_mode_key: { available: false },
+            live_mode_key: { available: false }
+          })
+        )
       const id = activeProfile === 'flyenv-client' ? 'acct_firstUser' : 'acct_secondUser'
       return JSON.stringify({
         ...oauth,
@@ -295,6 +313,28 @@ try {
     'reusing a stored profile issues only whoami for that profile'
   )
   assert.ok(scopedCalls.at(-1)!.includes('whoami'))
+  const beforeMissing = scopedCalls.length
+  verificationFailure = true
+  await assert.rejects(stripe.accountStatus(version, context), /no stored Stripe CLI login/)
+  await assert.rejects(
+    stripe.login(version, true, context),
+    /sign-in finished, but the selected profile could not be verified[\s\S]*no stored Stripe CLI login/
+  )
+  assert.equal(
+    scopedCalls.length - beforeMissing,
+    5,
+    'missing credentials are checked once without replaying completed authorization'
+  )
+  verificationFailure = false
+  canceledCompletion = true
+  const beforeCanceled = scopedCalls.length
+  await assert.rejects(stripe.login(version, true, context), /sign-in was canceled/)
+  assert.equal(
+    scopedCalls.length - beforeCanceled,
+    3,
+    'canceled exit-zero cannot be accepted as connected or inspect an old login'
+  )
+  canceledCompletion = false
   const until = async (condition: () => boolean) => {
     for (let i = 0; i < 100 && !condition(); i++) await new Promise((done) => setTimeout(done, 1))
     assert.ok(condition())

@@ -1,8 +1,8 @@
 import { loginCompletionArgs, stripeLoginUrl } from './Arguments'
 
 export const STRIPE_LOGIN_WAIT_TIMEOUT_MS = 10 * 60_000
-// Include the two preparation commands and margin before renderer IPC cleanup.
-export const STRIPE_LOGIN_REQUEST_TIMEOUT_MS = STRIPE_LOGIN_WAIT_TIMEOUT_MS + 90_000
+// Include preparation, required profile read-back and margin before renderer IPC cleanup.
+export const STRIPE_LOGIN_REQUEST_TIMEOUT_MS = STRIPE_LOGIN_WAIT_TIMEOUT_MS + 135_000
 
 export function parseStripeLogin(output: string): {
   browserUrl: string

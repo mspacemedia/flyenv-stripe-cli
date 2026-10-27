@@ -1,4 +1,8 @@
 import type { StripeContext } from './Connections'
+import type { StripeAccountStatus } from './Account'
+
+export type StripeLoginResult =
+  { reauthorization: true } | { account: StripeAccountStatus; output: string }
 
 export type StripeSettings = StripeContext & {
   forwardTo: string
@@ -20,6 +24,7 @@ export type StripeRelease = {
 }
 
 export type StripeLoginProgress = {
+  verifying?: boolean
   browserUrl?: string
   verificationCode?: string
   reauthorization?: boolean

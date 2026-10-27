@@ -19,7 +19,7 @@ try {
   const baseDir = join(temporary, 'server')
   const cacheDir = join(temporary, 'cache')
   const configPath = join(baseDir, 'stripe/cli.toml')
-  const configuration = '# Existing Stripe configuration retention fixture\n'
+  const configuration = '# Existing Stripe configuration retention fixture\ncolor = "off"\n'
   await mkdir(join(appDir, 'stripe'), { recursive: true })
   await mkdir(join(baseDir, 'stripe'), { recursive: true })
   await mkdir(cacheDir, { recursive: true })
@@ -72,6 +72,16 @@ try {
   assert.ok(!renderer.includes('createWebHashHistory'), 'plugin must reuse the host router')
   const fork = await readFile(join(outputRoot, 'fork/index.mjs'), 'utf8')
   assert.ok(fork.includes('STRIPE_CLI_TELEMETRY_OPTOUT'), 'privacy setting ships in the fork')
+  const emptyProfile = `flyenv-runtime-${globalThis.crypto.randomUUID()}`
+  await assert.rejects(
+    Promise.resolve(stripe.accountStatus(existing, { profile: emptyProfile, telemetry: false })),
+    /no stored Stripe CLI login/
+  )
+  assert.match(
+    await readFile(configPath, 'utf8'),
+    /color\s*=\s*["']off["']/,
+    'the missing-login check retains existing fixture settings when CLI metadata rewrites TOML'
+  )
   console.log(
     `Stripe plugin runtime passed: CLI ${existing.version}; existing layout and config retained`
   )
