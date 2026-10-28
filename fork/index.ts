@@ -1,4 +1,5 @@
 import { join, dirname, resolve as resolvePath } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { createWriteStream, existsSync } from 'node:fs'
 import { chmod, mkdir, open, writeFile, rename, rm } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
@@ -24,6 +25,7 @@ import {
 } from '../shared/Arguments'
 import { stripeReleaseAssets, stripeAssetSuffix, type GitHubRelease } from './Releases'
 import { runStripeCommand, stripeEnvironment } from './Command'
+import { StripeLoginAttempt } from './LoginAttempt'
 import { startStripeListener } from './Listener'
 import { parseStripeLogin, STRIPE_LOGIN_WAIT_TIMEOUT_MS } from '../shared/Login'
 import {
@@ -51,6 +53,7 @@ import {
 } from '../shared/Connections'
 
 class Stripe extends Base {
+  private loginAttempt = new StripeLoginAttempt()
   private credentialsChanging = false
   private listenerStarting = false
   constructor() {
@@ -73,7 +76,8 @@ class Stripe extends Base {
     context: StripeContext = {},
     timeout = 30_000,
     onOutput?: (text: string) => void,
-    maxOutput = 65_536
+    maxOutput = 65_536,
+    signal?: AbortSignal
   ) {
     const options = stripeContext(context)
     assertStripeProfileSupport(version.version, options)
@@ -85,10 +89,11 @@ class Stripe extends Base {
       timeout,
       onOutput,
       maxOutput,
-      options.telemetry
+      options.telemetry,
+      signal
     )
   }
-  private async withCredentials(task: () => Promise<void>) {
+  private async withCredentials<T>(task: () => Promise<T>): Promise<T> {
     if (this.credentialsChanging || this.listenerStarting)
       throw new Error('Finish the current Stripe account or listener action first.')
     this.credentialsChanging = true
@@ -106,7 +111,7 @@ class Stripe extends Base {
         }
         throw new Error('Stop the Stripe listener before changing accounts.')
       }
-      await task()
+      return await task()
     } finally {
       this.credentialsChanging = false
     }
@@ -360,22 +365,39 @@ class Stripe extends Base {
   }
 
   accountStatus(version: SoftInstalled, context: StripeContext = {}) {
-    return new ForkPromise<StripeAccountStatus>(async (resolve) => {
-      if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
-      try {
-        const options = stripeContext(context)
-        const output = await this.cli(version, ['whoami', '--format', 'json'], options, 30_000)
-        resolve(parseStripeAccount(output, options.profile))
-      } catch (error) {
-        throw stripeAccountFailure(error)
-      }
-    })
+    return new ForkPromise<StripeAccountStatus>(async (resolve) =>
+      resolve(await this.inspectAccount(version, context))
+    )
+  }
+
+  private async inspectAccount(
+    version: SoftInstalled,
+    context: StripeContext,
+    signal?: AbortSignal
+  ): Promise<StripeAccountStatus> {
+    if (!existsSync(version.bin)) throw new Error('Select an installed Stripe CLI.')
+    try {
+      const options = stripeContext(context)
+      const output = await this.cli(
+        version,
+        ['whoami', '--format', 'json'],
+        options,
+        30_000,
+        undefined,
+        undefined,
+        signal
+      )
+      return parseStripeAccount(output, options.profile)
+    } catch (error) {
+      throw stripeAccountFailure(error)
+    }
   }
 
   private async verifyLogin(
     version: SoftInstalled,
     context: StripeContext,
-    completed: string
+    completed: string,
+    signal: AbortSignal
   ): Promise<StripeLoginResult> {
     const output = redactStripeOutput(completed).trim()
     if (/(?:^|\n)\s*cancel(?:l)?ed(?:[.!]|\s|$)/i.test(output))
@@ -383,8 +405,8 @@ class Stripe extends Base {
         'Stripe CLI reported that sign-in was canceled. No new connection was confirmed. Use saved connection to inspect the current profile.'
       )
     try {
-      const account = await this.accountStatus(version, context)
-      return { account: account!, output }
+      const account = await this.inspectAccount(version, context, signal)
+      return { account, output }
     } catch (error) {
       throw new Error(
         `${output ? output + '\n' : ''}Stripe CLI sign-in finished, but the selected profile could not be verified. ${String(error)} No automatic retry was started. Click Connect to check again, or open Account options to sign in.`
@@ -392,62 +414,108 @@ class Stripe extends Base {
     }
   }
 
-  login(version: SoftInstalled, freshSession = false, context: StripeContext = {}) {
-    return new ForkPromise<StripeLoginResult>((resolve, _reject, on) =>
-      this.withCredentials(async () => {
-        if (typeof freshSession !== 'boolean') throw new Error('Invalid Stripe login mode.')
-        if (!existsSync(version.bin))
-          throw new Error('Install and select a Stripe CLI version first.')
-        await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
-        const options = stripeContext(context)
-        const help = await this.cli(version, ['login', '--help'], options)
-        if (freshSession && !help.includes('--new-session'))
-          throw new Error(
-            'This Stripe CLI version does not support fresh sessions. Install a newer CLI version first.'
-          )
-        if (help.includes('--non-interactive')) {
-          const output = await this.cli(
-            version,
-            ['login', '--non-interactive', ...(freshSession ? ['--new-session'] : [])],
-            options
-          )
-          const { browserUrl, verificationCode, args } = parseStripeLogin(output)
-          const reauthorization = args[1] === '--complete-reauth'
-          on({ browserUrl, verificationCode, reauthorization })
-          if (reauthorization) {
-            // CLI polls only for an account-list change; approving unchanged access
-            // has no completion signal. Let the user check their current account.
-            resolve({ reauthorization: true })
-            return
-          }
-          const completed = await this.cli(version, args, options, STRIPE_LOGIN_WAIT_TIMEOUT_MS)
-          on({ verifying: true })
-          resolve(await this.verifyLogin(version, options, completed))
-        } else {
-          // Older CLI releases wait for browser approval in a single browserless command.
-          let lastUrl = ''
-          const output = await this.cli(
-            version,
-            ['login', '--browserless', ...(freshSession ? ['--new-session'] : [])],
-            options,
-            STRIPE_LOGIN_WAIT_TIMEOUT_MS,
-            (text) => {
-              const match = text.match(/https:\/\/dashboard\.stripe\.com\/stripecli\/[^\s<>"']+/)
-              if (match && match[0] !== lastUrl) {
-                lastUrl = stripeLoginUrl(match[0])
-                on({
-                  browserUrl: lastUrl,
-                  verificationCode: text.match(/pairing code is:?\s*([^\s]+)/i)?.[1] ?? ''
-                })
+  cancelLogin(attemptId: string) {
+    return new ForkPromise(async (resolve) =>
+      resolve({ cancelled: await this.loginAttempt.cancel(attemptId) })
+    )
+  }
+
+  login(
+    version: SoftInstalled,
+    freshSession = false,
+    context: StripeContext = {},
+    attemptId = randomUUID()
+  ) {
+    return new ForkPromise<StripeLoginResult>(async (resolve, _reject, on) =>
+      resolve(
+        await this.loginAttempt.run<StripeLoginResult>(attemptId, (signal) =>
+          this.withCredentials(async () => {
+            signal.throwIfAborted()
+            if (typeof freshSession !== 'boolean') throw new Error('Invalid Stripe login mode.')
+            if (!existsSync(version.bin))
+              throw new Error('Install and select a Stripe CLI version first.')
+            await mkdir(this.baseDir(), { recursive: true, mode: 0o700 })
+            const options = stripeContext(context)
+            const help = await this.cli(
+              version,
+              ['login', '--help'],
+              options,
+              30_000,
+              undefined,
+              undefined,
+              signal
+            )
+            if (freshSession && !help.includes('--new-session'))
+              throw new Error(
+                'This Stripe CLI version does not support fresh sessions. Install a newer CLI version first.'
+              )
+            if (help.includes('--non-interactive')) {
+              const output = await this.cli(
+                version,
+                ['login', '--non-interactive', ...(freshSession ? ['--new-session'] : [])],
+                options,
+                30_000,
+                undefined,
+                undefined,
+                signal
+              )
+              const { browserUrl, verificationCode, args } = parseStripeLogin(output)
+              const reauthorization = args[1] === '--complete-reauth'
+              signal.throwIfAborted()
+              on({ browserUrl, verificationCode, reauthorization })
+              if (reauthorization) {
+                // CLI polls only for an account-list change; approving unchanged access
+                // has no completion signal. Let the user check their current account.
+                return { reauthorization: true as const }
               }
+              const completed = await this.cli(
+                version,
+                args,
+                options,
+                STRIPE_LOGIN_WAIT_TIMEOUT_MS,
+                undefined,
+                undefined,
+                signal
+              )
+              signal.throwIfAborted()
+              on({ verifying: true })
+              return await this.verifyLogin(version, options, completed, signal)
+            } else {
+              // Older CLI releases wait for browser approval in a single browserless command.
+              let lastUrl = ''
+              const output = await this.cli(
+                version,
+                ['login', '--browserless', ...(freshSession ? ['--new-session'] : [])],
+                options,
+                STRIPE_LOGIN_WAIT_TIMEOUT_MS,
+                (text) => {
+                  if (signal.aborted) return
+                  const match = text.match(
+                    /https:\/\/dashboard\.stripe\.com\/stripecli\/[^\s<>"']+/
+                  )
+                  if (match && match[0] !== lastUrl) {
+                    lastUrl = stripeLoginUrl(match[0])
+                    on({
+                      browserUrl: lastUrl,
+                      verificationCode: text.match(/pairing code is:?\s*([^\s]+)/i)?.[1] ?? ''
+                    })
+                  }
+                },
+                undefined,
+                signal
+              )
+              signal.throwIfAborted()
+              on({ verifying: true })
+              return await this.verifyLogin(
+                version,
+                options,
+                output.replace(/https:\/\/[^\s]+/g, '').trim(),
+                signal
+              )
             }
-          )
-          on({ verifying: true })
-          resolve(
-            await this.verifyLogin(version, options, output.replace(/https:\/\/[^\s]+/g, '').trim())
-          )
-        }
-      })
+          })
+        )
+      )
     )
   }
 

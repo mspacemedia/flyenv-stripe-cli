@@ -2,7 +2,7 @@ import type { StripeContext } from './Connections'
 import type { StripeAccountStatus } from './Account'
 
 export type StripeLoginResult =
-  { reauthorization: true } | { account: StripeAccountStatus; output: string }
+  { reauthorization: true } | { cancelled: true } | { account: StripeAccountStatus; output: string }
 
 export type StripeSettings = StripeContext & {
   forwardTo: string

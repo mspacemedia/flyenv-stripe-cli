@@ -50,6 +50,10 @@ export class StripeController {
   discovery = new StripeOperation()
   download = new StripeOperation()
   authentication = new StripeOperation()
+  cancellation = new StripeOperation()
+  loginNotice = ''
+  private loginAttemptId = ''
+  private loginCancellationRequested = false
   loginAction: '' | 'connect' | 'fresh' | 'different-user' = ''
   verifyingLogin = false
   accountCheck = new StripeOperation()
@@ -106,6 +110,7 @@ export class StripeController {
       module.installed.some((item) => item.run || item.running) ||
       [
         this.authentication,
+        this.cancellation,
         this.accountCheck,
         this.disconnection,
         this.preferenceChange,
@@ -131,6 +136,8 @@ export class StripeController {
     this.listenerAuthError = ''
     this.testEventOutput = ''
     this.authentication.error = ''
+    this.cancellation.error = ''
+    this.loginNotice = ''
     this.accountCheck.error = ''
     this.disconnection.error = ''
     this.testEvent.error = ''
@@ -293,9 +300,13 @@ export class StripeController {
   async startParams(): Promise<StripeSettings[]> {
     await this.load()
     if (
-      [this.authentication, this.disconnection, this.preferenceChange, this.accountCheck].some(
-        (operation) => operation.running
-      )
+      [
+        this.authentication,
+        this.cancellation,
+        this.disconnection,
+        this.preferenceChange,
+        this.accountCheck
+      ].some((operation) => operation.running)
     )
       throw new Error(StripeT('connectionBusy'))
     const snapshot = { ...this.settings, ...this.context }
@@ -354,7 +365,7 @@ export class StripeController {
     manualBrowser = false
   ): Promise<void> {
     if (!this.loaded && !(await this.ready())) return
-    if (this.authentication.running) return
+    if (this.authentication.running || this.cancellation.running) return
     if (
       this.disconnection.running ||
       this.preferenceChange.running ||
@@ -383,15 +394,22 @@ export class StripeController {
       return
     }
     this.loginAction = manualBrowser ? 'different-user' : freshSession ? 'fresh' : 'connect'
+    const attemptId = globalThis.crypto.randomUUID()
+    this.loginAttemptId = attemptId
+    this.loginCancellationRequested = false
+    const chooseBrowser = manualBrowser || freshSession
+    this.loginNotice = ''
+    this.cancellation.error = ''
     this.verifyingLogin = false
     this.browserUrl = ''
-    this.manualApproval = manualBrowser === true
+    this.manualApproval = chooseBrowser
     this.verificationCode = ''
     this.browserError = ''
     this.accountSummary = ''
     this.reauthorizationPending = false
     const request: StripeRequest = (method, args, timeout, progress) =>
       this.request(method, args, timeout, (value: StripeLoginProgress) => {
+        if (this.loginAttemptId !== attemptId || this.loginCancellationRequested) return
         progress(value)
         if (value.verifying) {
           this.verifyingLogin = true
@@ -404,16 +422,20 @@ export class StripeController {
           this.verificationCode = value.verificationCode ?? ''
           this.reauthorizationPending = value.reauthorization === true
           // Opening the browser is supplementary: the visible link still allows approval.
-          if (!manualBrowser) void this.openApproval()
+          if (!chooseBrowser) void this.openApproval()
         }
       })
     try {
       const result = await this.authentication.run(
         request,
         'login',
-        [version, freshSession, this.context],
+        [version, freshSession, this.context, attemptId],
         STRIPE_LOGIN_REQUEST_TIMEOUT_MS
       )
+      if (result?.cancelled === true) {
+        this.loginNotice = StripeT('loginCancelled')
+        return
+      }
       if (result?.reauthorization === true) {
         this.reauthorizationPending = true
         return
@@ -442,17 +464,46 @@ export class StripeController {
       this.reauthorizationPending = false
       MessageError(String(error))
     } finally {
+      if (this.loginAttemptId === attemptId) this.loginAttemptId = ''
       this.loginAction = ''
       this.verifyingLogin = false
       if (!this.reauthorizationPending) {
         this.browserUrl = ''
+        this.verificationCode = ''
         this.manualApproval = false
       }
     }
   }
 
+  async cancelLogin(): Promise<void> {
+    if (this.cancellation.running) return
+    if (!this.authentication.running) {
+      if (this.reauthorizationPending) {
+        this.reauthorizationPending = false
+        this.browserUrl = ''
+        this.verificationCode = ''
+        this.manualApproval = false
+        this.loginNotice = StripeT('loginCancelled')
+      }
+      return
+    }
+    const attemptId = this.loginAttemptId
+    if (!attemptId) return
+    this.loginCancellationRequested = true
+    // A consumed device approval cannot be reused, even if stopping the CLI fails.
+    this.browserUrl = ''
+    this.verificationCode = ''
+    this.manualApproval = false
+    this.browserError = ''
+    try {
+      await this.cancellation.run(this.request, 'cancelLogin', [attemptId], 30_000)
+    } catch (error) {
+      MessageError(String(error))
+    }
+  }
+
   async openApproval(): Promise<void> {
-    if (!this.browserUrl || this.approval.running) return
+    if (!this.browserUrl || this.approval.running || this.cancellation.running) return
     const url = stripeLoginUrl(this.browserUrl)
     this.browserError = ''
     try {
@@ -514,7 +565,8 @@ export class StripeController {
 
   private requireCLI(version: ModuleInstalledItem | undefined): ModuleInstalledItem {
     if (!version?.enable) throw new Error(StripeT('selectCLI'))
-    if (this.authentication.running) throw new Error(StripeT('loginPending'))
+    if (this.authentication.running || this.cancellation.running)
+      throw new Error(StripeT('loginPending'))
     if (this.accountCheck.running) throw new Error(StripeT('accountCheckPending'))
     if (this.disconnection.running || this.preferenceChange.running)
       throw new Error(StripeT('connectionBusy'))

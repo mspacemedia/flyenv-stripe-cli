@@ -20,9 +20,11 @@ export function runStripeCommand(
   timeout = 30_000,
   onOutput?: (text: string) => void,
   maxOutput = 65_536,
-  telemetry = false
+  telemetry = false,
+  signal?: AbortSignal
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted()
     const child = spawn(bin, args, {
       env: stripeEnvironment(env, telemetry),
       shell: false,
@@ -32,9 +34,12 @@ export function runStripeCommand(
     let output = ''
     let timedOut = false
     let progressError: unknown
+    let processError: unknown
     const onExit = () => {
       child.kill('SIGKILL')
     }
+    const onAbort = () => child.kill('SIGKILL')
+    signal?.addEventListener('abort', onAbort, { once: true })
     process.once('exit', onExit)
     const timer = setTimeout(() => {
       timedOut = true
@@ -43,11 +48,12 @@ export function runStripeCommand(
     const cleanup = () => {
       clearTimeout(timer)
       process.off('exit', onExit)
+      signal?.removeEventListener('abort', onAbort)
     }
     const receive = (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-maxOutput)
       try {
-        onOutput?.(cleanStripeOutput(output))
+        if (!signal?.aborted) onOutput?.(cleanStripeOutput(output))
       } catch (error) {
         progressError = error
         child.kill('SIGKILL')
@@ -55,13 +61,20 @@ export function runStripeCommand(
     }
     child.stdout?.on('data', receive)
     child.stderr?.on('data', receive)
-    child.once('error', (error) => {
+    child.on('error', (error) => {
+      // A failed kill does not prove the child stopped. Keep ownership until close.
+      if (child.pid) {
+        processError = error
+        return
+      }
       cleanup()
       reject(error)
     })
     child.once('close', (code) => {
       cleanup()
-      if (progressError) reject(progressError)
+      if (signal?.aborted) reject(signal.reason)
+      else if (progressError) reject(progressError)
+      else if (processError) reject(processError)
       else if (timedOut) reject(new Error('Stripe CLI operation timed out. Try again.'))
       else if (code !== 0)
         reject(

@@ -339,6 +339,57 @@ try {
     for (let i = 0; i < 100 && !condition(); i++) await new Promise((done) => setTimeout(done, 1))
     assert.ok(condition())
   }
+  const scopedRun = fixture.run
+  for (const phase of [
+    '--help',
+    '--non-interactive',
+    '--complete-device',
+    'whoami',
+    '--browserless'
+  ]) {
+    let reached = false
+    let closed = false
+    let stopped!: () => void
+    let signal!: AbortSignal
+    fixture.run = async (...args: any[]) => {
+      if (phase === '--browserless' && args[1].includes('--help')) return '--new-session'
+      if (!args[1].includes(phase)) return scopedRun(...args)
+      signal = args[7]
+      assert.ok(signal instanceof AbortSignal, `${phase} belongs to the same cancellable attempt`)
+      reached = true
+      return new Promise((_done, reject) => {
+        stopped = () => {
+          closed = true
+          reject(signal.reason)
+        }
+      })
+    }
+    const id = globalThis.crypto.randomUUID()
+    const pendingLogin = stripe.login(version, true, context, id)
+    await until(() => reached)
+    assert.deepEqual(await stripe.cancelLogin(globalThis.crypto.randomUUID()), { cancelled: false })
+    assert.equal(signal.aborted, false)
+    let acknowledged = false
+    const cancelled = Promise.resolve(stripe.cancelLogin(id)).then((value) => {
+      assert.equal(closed, true, 'fork acknowledges cancel only after child closure')
+      acknowledged = true
+      return value
+    })
+    await until(() => signal.aborted)
+    assert.equal(acknowledged, false)
+    await assert.rejects(stripe.logout(version, context), /Finish the current Stripe account/)
+    await assert.rejects(stripe.login(version, true, context), /Finish or cancel/)
+    stopped()
+    assert.deepEqual(await pendingLogin, { cancelled: true })
+    assert.deepEqual(await cancelled, { cancelled: true })
+    fixture.run = scopedRun
+    assert.equal((await stripe.login(version, true, context)).account.accountId, 'acct_firstUser')
+    assert.deepEqual(
+      await stripe.cancelLogin(id),
+      { cancelled: false },
+      'late cancel cannot affect retry'
+    )
+  }
   pauseLogout = true
   const logout = stripe.logout(version, context)
   // Attach rejection immediately; later assertions inspect the terminal error.

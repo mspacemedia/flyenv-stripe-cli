@@ -7,6 +7,7 @@ import {
 } from '../shared/Arguments'
 import { stripeAssetSuffix, stripeReleaseAssets, type GitHubRelease } from '../fork/Releases'
 import { runStripeCommand, stripeEnvironment } from '../fork/Command'
+import { StripeLoginAttempt } from '../fork/LoginAttempt'
 import { startStripeListener } from '../fork/Listener'
 import { hasStripeAuthenticationFailure, stripeRuntimeFromLogs } from '../shared/Authentication'
 import { StripeOperation, type StripeRequest } from '../render/Operation'
@@ -515,4 +516,87 @@ assert.equal(
   exitsBefore,
   'child completion and timeout remove cleanup listeners'
 )
+
+{
+  const abortedBeforeSpawn = new AbortController()
+  abortedBeforeSpawn.abort()
+  await assert.rejects(
+    runStripeCommand(
+      'must-not-spawn',
+      [],
+      process.env,
+      30_000,
+      undefined,
+      undefined,
+      false,
+      abortedBeforeSpawn.signal
+    ),
+    { name: 'AbortError' }
+  )
+  const abortChild = new AbortController()
+  let childPid = 0
+  let childReady!: () => void
+  const ready = new Promise<void>((done) => {
+    childReady = done
+  })
+  const childCommand = runStripeCommand(
+    process.execPath,
+    ['-e', 'process.stdout.write(String(process.pid)); setInterval(()=>{},1000)'],
+    process.env,
+    30_000,
+    (output) => {
+      childPid = Number(output)
+      childReady()
+    },
+    undefined,
+    false,
+    abortChild.signal
+  )
+  await ready
+  abortChild.abort()
+  await assert.rejects(childCommand, { name: 'AbortError' })
+  assert.throws(
+    () => process.kill(childPid, 0),
+    { code: 'ESRCH' },
+    'abort settles after child close'
+  )
+  assert.equal(process.listenerCount('exit'), exitsBefore, 'abort removes child cleanup listener')
+
+  const attempts = new StripeLoginAttempt()
+  const id = '11111111-1111-4111-8111-111111111111'
+  const otherId = '22222222-2222-4222-8222-222222222222'
+  let started = false
+  const early = attempts.run(id, async () => {
+    started = true
+    return 'unexpected'
+  })
+  assert.equal(await attempts.cancel(id), true)
+  assert.deepEqual(await early, { cancelled: true })
+  assert.equal(started, false, 'cancel before preparation prevents the task')
+  let release!: (value: string) => void
+  let signal!: AbortSignal
+  const active = attempts.run(id, (value) => {
+    signal = value
+    return new Promise<string>((done) => {
+      release = done
+    })
+  })
+  await Promise.resolve()
+  assert.equal(await attempts.cancel(otherId), false, 'another attempt ID cannot cancel this one')
+  let cancelSettled = false
+  const cancel = attempts.cancel(id).then(() => {
+    cancelSettled = true
+  })
+  const duplicateCancel = attempts.cancel(id)
+  assert.equal(signal.aborted, true)
+  await Promise.resolve()
+  assert.equal(cancelSettled, false, 'cancellation waits for the owned task to stop')
+  assert.throws(() => attempts.run(otherId, async () => 'new'), /Finish or cancel/)
+  release('credentials may already have changed')
+  await cancel
+  assert.equal(await duplicateCancel, true)
+  assert.deepEqual(await active, { cancelled: true })
+  assert.equal(await attempts.run(otherId, async () => 'retry'), 'retry')
+  assert.equal(await attempts.cancel(id), false, 'stale cancellation preserves completed login')
+}
 console.log('Stripe service tests passed')

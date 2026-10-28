@@ -147,8 +147,8 @@ try {
   )
   assert.equal(
     controller.verificationCode,
-    'ABCD-EFGH',
-    'failed attempt retains the code with ended UI'
+    '',
+    'an ended attempt discards its unusable comparison code'
   )
 
   const retry = controller.login(version, true)
@@ -171,6 +171,9 @@ try {
   })
   await tick()
   assert.equal(controller.verificationCode, 'NEWX-CODE')
+  assert.equal(controller.manualApproval, true, 'reset waits for an explicit browser choice')
+  assert.equal(controller.browserError, '')
+  await controller.openApproval()
   assert.equal(controller.browserError, 'Error: Browser unavailable')
   assert.equal(controller.authentication.running, true, 'browser failure cannot cancel CLI polling')
   progress({ verifying: true })
@@ -634,6 +637,134 @@ try {
   assert.equal(successes.length, successesBeforeUnverified)
   assert.equal(unverified.authentication.running, false)
   assert.ok(errors.at(-1)?.includes('has not been verified'))
+
+  const cancellable = new StripeController()
+  cancellable.loaded = true
+  let attemptId = ''
+  let loginCalls = 0
+  let cancelCalls = 0
+  let finishCancelled!: (value: any) => void
+  let finishCancel!: (value: any) => void
+  let pendingProgress!: (value: any) => void
+  mock.request = (_command: string, args: any[], _message: string, _timeout: number, on: any) => {
+    if (args[0] === 'runtime') return Promise.resolve({ code: 0, data: { secret: '', output: '' } })
+    if (args[0] === 'cancelLogin') {
+      assert.equal(args[1], attemptId, 'cancel targets the initiating attempt only')
+      cancelCalls++
+      return new Promise((done) => {
+        finishCancel = done
+      })
+    }
+    assert.equal(args[0], 'login')
+    assert.deepEqual(args[3], { profile: 'default', telemetry: false })
+    assert.match(args[4], /^[a-f0-9-]{36}$/)
+    attemptId = args[4]
+    loginCalls++
+    pendingProgress = on
+    return new Promise((done) => {
+      finishCancelled = done
+    })
+  }
+  const opensBeforeReset = mock.opens
+  const pending = cancellable.login(version, true)
+  await tick()
+  pendingProgress({ code: 200, msg: login })
+  await tick()
+  assert.equal(mock.opens, opensBeforeReset, 'reset never opens the default browser automatically')
+  const oldProgress = pendingProgress
+  const oldId = attemptId
+  const cancel = cancellable.cancelLogin()
+  await tick()
+  await cancellable.cancelLogin()
+  assert.equal(cancelCalls, 1, 'duplicate cancel requests join the pending operation')
+  assert.equal(cancellable.authentication.running, true)
+  assert.equal(cancellable.cancellation.running, true)
+  assert.equal(cancellable.browserUrl, '')
+  assert.equal(cancellable.verificationCode, '')
+  oldProgress({ code: 200, msg: login })
+  assert.equal(
+    cancellable.browserUrl,
+    '',
+    'late approval progress cannot resurrect a consumed link'
+  )
+  cancellable.attach()
+  await tick()
+  cancellable.detach()
+  assert.equal(
+    cancellable.cancellation.running,
+    true,
+    'page re-entry preserves cancellation ownership'
+  )
+  await assert.rejects(cancellable.startParams(), /Stop the Stripe listener/)
+  finishCancelled({ code: 0, data: { cancelled: true } })
+  await pending
+  await cancellable.login(version, true)
+  assert.equal(
+    loginCalls,
+    1,
+    'retry waits for cancellation acknowledgement as well as login terminal'
+  )
+  finishCancel({ code: 0, data: { cancelled: true } })
+  await cancel
+  assert.equal(cancellable.connectionBusy, false)
+  assert.match(cancellable.loginNotice, /Close the old Stripe approval tab/)
+  assert.equal(cancellable.accountSummary, '')
+  const next = cancellable.login(version, true, true)
+  await tick()
+  assert.notEqual(attemptId, oldId, 'retry creates a separate device attempt')
+  oldProgress({ code: 200, msg: login })
+  assert.equal(cancellable.browserUrl, '', 'old progress cannot affect a new attempt')
+  pendingProgress({ code: 200, msg: login })
+  const failedCancel = cancellable.cancelLogin()
+  await tick()
+  finishCancel({ code: 1, msg: 'Could not confirm cancellation' })
+  await failedCancel
+  assert.match(cancellable.cancellation.error, /Could not confirm cancellation/)
+  assert.equal(
+    cancellable.authentication.running,
+    true,
+    'cancel failure cannot unlock a live login'
+  )
+  pendingProgress({ code: 200, msg: login })
+  assert.equal(cancellable.browserUrl, '')
+  await cancellable.login(version, true)
+  assert.equal(loginCalls, 2)
+  const tryCancelAgain = cancellable.cancelLogin()
+  await tick()
+  finishCancelled({ code: 0, data: { cancelled: true } })
+  await next
+  finishCancel({ code: 0, data: { cancelled: true } })
+  await tryCancelAgain
+  assert.equal(cancellable.connectionBusy, false)
+  assert.equal(cancellable.cancellation.error, '')
+  // Permission-update approval has no CLI poll; cancellation just dismisses its link.
+  cancellable.reauthorizationPending = true
+  cancellable.browserUrl = approvalUrl
+  await cancellable.cancelLogin()
+  assert.equal(cancellable.reauthorizationPending, false)
+  assert.equal(cancellable.browserUrl, '')
+  assert.equal(
+    cancelCalls,
+    3,
+    'dismissing finished reauthorization does not cancel another process'
+  )
+  const verificationWins = cancellable.login(version, true)
+  await tick()
+  const lateCancel = cancellable.cancelLogin()
+  await tick()
+  finishCancelled({
+    code: 0,
+    data: { account: identities['first-user'], output: 'Verified before cancellation' }
+  })
+  await verificationWins
+  finishCancel({ code: 0, data: { cancelled: false } })
+  await lateCancel
+  assert.match(
+    cancellable.accountSummary,
+    /acct_firstUser/,
+    'completed verification wins over a stale cancel'
+  )
+  assert.equal(cancellable.loginNotice, '')
   console.log(
     'Stripe pairing, saved connections, logout, telemetry and workbench controller regression tests passed'
   )

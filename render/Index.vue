@@ -137,7 +137,7 @@
                         :disabled="!stripe.loaded || !version || stripe.connectionBusy"
                       >
                         <el-button
-                          :loading="stripe.authentication.running"
+                          :loading="stripe.authentication.running && !stripe.cancellation.running"
                           :disabled="!stripe.loaded || !version || stripe.connectionBusy"
                           data-testid="stripe-account-options"
                           >{{ StripeT('accountOptions') }}
@@ -176,6 +176,18 @@
                           </el-dropdown-menu>
                         </template>
                       </el-dropdown>
+                      <el-button
+                        v-if="
+                          stripe.authentication.running ||
+                          stripe.cancellation.running ||
+                          stripe.reauthorizationPending
+                        "
+                        :loading="stripe.cancellation.running"
+                        :disabled="stripe.cancellation.running"
+                        data-testid="stripe-cancel-login"
+                        @click="stripe.cancelLogin()"
+                        >{{ StripeT('cancelLogin') }}</el-button
+                      >
                     </div>
                     <p v-if="stripe.accountCheck.error" class="mt-3 text-xs opacity-75">{{
                       StripeT('savedConnectionHelp')
@@ -185,6 +197,14 @@
                       class="mt-3 text-xs opacity-75"
                       >{{ StripeT('freshSessionHelp') }}</p
                     >
+                    <el-alert
+                      v-if="stripe.loginNotice"
+                      class="mt-3"
+                      :title="stripe.loginNotice"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                    />
                     <el-alert
                       v-if="stripe.authentication.running && stripe.verifyingLogin"
                       class="mt-4"
@@ -242,13 +262,15 @@
                       </p>
                     </div>
                     <el-button
-                      v-if="stripe.browserUrl && !stripe.manualApproval"
+                      v-if="stripe.browserUrl"
                       class="mt-3 inline-block break-all"
                       link
                       type="primary"
                       :loading="stripe.approval.running"
                       @click="stripe.openApproval"
-                      >{{ StripeT('openLogin') }}</el-button
+                      >{{
+                        StripeT(stripe.manualApproval ? 'openCurrentBrowser' : 'openLogin')
+                      }}</el-button
                     >
                     <p v-if="stripe.accountSummary" class="mt-3 whitespace-pre-wrap text-sm">{{
                       stripe.accountSummary
@@ -256,6 +278,7 @@
                     <el-alert
                       v-if="
                         stripe.authentication.error ||
+                        stripe.cancellation.error ||
                         stripe.browserError ||
                         stripe.accountCheck.error ||
                         stripe.disconnection.error ||
@@ -264,6 +287,7 @@
                       class="mt-3"
                       :title="
                         stripe.authentication.error ||
+                        stripe.cancellation.error ||
                         stripe.browserError ||
                         stripe.accountCheck.error ||
                         stripe.disconnection.error ||
